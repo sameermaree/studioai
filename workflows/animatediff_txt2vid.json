@@ -1,0 +1,120 @@
+{
+  "id": "animatediff-txt2vid-v1",
+  "name": "AnimateDiff Text to Video",
+  "version": "1.0.0",
+  "description": "Generate short video clips from text using AnimateDiff",
+  "model": "AnimateDiff + SD 1.5",
+  "type": "txt2vid",
+  "metadata": {
+    "creator": "SERI AI Studio",
+    "created_at": "2023-10-20T00:00:00Z",
+    "updated_at": "2023-11-05T00:00:00Z",
+    "default_width": 512,
+    "default_height": 512,
+    "default_steps": 25,
+    "default_cfg": 8.0,
+    "default_fps": 12,
+    "default_motion_bucket_id": 127,
+    "default_frames": 16
+  },
+  "nodes": {
+    "positive_prompt": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "a beautiful landscape with mountains and a lake, cinematic, high quality",
+        "clip": "clip"
+      }
+    },
+    "negative_prompt": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry, bad quality, distorted, ugly",
+        "clip": "clip"
+      }
+    },
+    "empty_latent": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 512,
+        "height": 512,
+        "batch_size": 1
+      }
+    },
+    "animatediff_loader": {
+      "class_type": "AnimateDiffLoaderWithContext",
+      "inputs": {
+        "model_name": "mm_sd_v15_v2.ckpt",
+        "context_options": "AnimateDiff",
+        "motion_scale": 1.0,
+        "apply_v2_models_properly": true
+      }
+    },
+    "animatediff_ksampler": {
+      "class_type": "KSamplerAdvanced",
+      "inputs": {
+        "model": "model",
+        "seed": 42,
+        "steps": 25,
+        "cfg": 8.0,
+        "sampler_name": "euler",
+        "scheduler": "karras",
+        "positive": "positive_prompt",
+        "negative": "negative_prompt",
+        "latent_image": "empty_latent",
+        "add_noise": "enable",
+        "start_at_step": 0,
+        "end_at_step": 25,
+        "return_with_leftover_noise": false
+      }
+    },
+    "vae_decode_animation": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": "animatediff_ksampler",
+        "vae": "vae"
+      }
+    },
+    "create_video": {
+      "class_type": "VHS_VideoCombine",
+      "inputs": {
+        "images": "vae_decode_animation",
+        "fps": 12,
+        "filename_prefix": "animatediff_output",
+        "format": "mp4",
+        "quality": 95,
+        "crf": 23
+      }
+    },
+    "save_video": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "video": "create_video",
+        "filename_prefix": "animatediff_final",
+        "fps": 12,
+        "quality": 95
+      }
+    }
+  },
+  "inputNodes": {
+    "promptNode": "positive_prompt",
+    "negativePromptNode": "negative_prompt",
+    "sizeNode": "empty_latent",
+    "seedNode": "animatediff_ksampler",
+    "stepsNode": "animatediff_ksampler",
+    "cfgNode": "animatediff_ksampler",
+    "fpsNode": "create_video"
+  },
+  "outputNodes": {
+    "videoNode": "save_video"
+  },
+  "parameterMapping": {
+    "prompt": "text",
+    "negative_prompt": "text",
+    "width": "width",
+    "height": "height",
+    "seed": "seed",
+    "steps": "steps",
+    "cfg_scale": "cfg",
+    "fps": "fps"
+  }
+}

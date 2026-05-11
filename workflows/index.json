@@ -1,0 +1,56 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2023-11-15T00:00:00Z",
+  "templates": [
+    {
+      "id": "sdxl-txt2img-v1",
+      "name": "SDXL Text to Image",
+      "description": "Generate high-quality images using SDXL",
+      "type": "txt2img",
+      "file": "sdxl_txt2img.json",
+      "model": "SDXL 1.0",
+      "thumbnail": "thumbnails/sdxl_txt2img.jpg",
+      "default": true
+    },
+    {
+      "id": "sd15-img2img-v1",
+      "name": "SD 1.5 Image to Image",
+      "description": "Transform existing images using Stable Diffusion 1.5",
+      "type": "img2img",
+      "file": "sd15_img2img.json",
+      "model": "SD 1.5",
+      "thumbnail": "thumbnails/sd15_img2img.jpg",
+      "default": false
+    },
+    {
+      "id": "animatediff-txt2vid-v1",
+      "name": "AnimateDiff Text to Video",
+      "description": "Generate short video clips from text using AnimateDiff",
+      "type": "txt2vid",
+      "file": "animatediff_txt2vid.json",
+      "model": "AnimateDiff + SD 1.5",
+      "thumbnail": "thumbnails/animatediff_txt2vid.jpg",
+      "default": true
+    },
+    {
+      "id": "sd-upscale-v1",
+      "name": "SD Upscale",
+      "description": "Upscale images with Stable Diffusion refinement",
+      "type": "upscale",
+      "file": "sd_upscale.json",
+      "model": "SD 1.5",
+      "thumbnail": "thumbnails/sd_upscale.jpg",
+      "default": false
+    },
+    {
+      "id": "img2vid-motion-v1",
+      "name": "Image to Video Motion",
+      "description": "Add motion to static images to create videos",
+      "type": "img2vid",
+      "file": "img2vid_motion.json",
+      "model": "Stable Video Diffusion",
+      "thumbnail": "thumbnails/img2vid_motion.jpg",
+      "default": true
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "id": "sd-upscale-v1",
+  "name": "SD Upscale",
+  "version": "1.0.0",
+  "description": "Upscale images with Stable Diffusion refinement",
+  "model": "SD 1.5",
+  "type": "upscale",
+  "metadata": {
+    "creator": "SERI AI Studio",
+    "created_at": "2023-11-01T00:00:00Z",
+    "updated_at": "2023-11-01T00:00:00Z",
+    "default_scale_factor": 2,
+    "default_denoise": 0.4,
+    "default_steps": 20
+  },
+  "nodes": {
+    "load_image": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "image.jpg"
+      }
+    },
+    "upscale_image": {
+      "class_type": "ImageUpscaleWithModel",
+      "inputs": {
+        "image": "load_image",
+        "upscale_model": "4x-UltraSharp",
+        "scale_by": 2.0
+      }
+    },
+    "vae_encode": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": "upscale_image",
+        "vae": "vae"
+      }
+    },
+    "positive_prompt": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "high quality, detailed",
+        "clip": "clip"
+      }
+    },
+    "negative_prompt": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry, pixelated, low quality",
+        "clip": "clip"
+      }
+    },
+    "sampler": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 42,
+        "steps": 20,
+        "cfg": 7.0,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "denoise": 0.4,
+        "model": "model",
+        "positive": "positive_prompt",
+        "negative": "negative_prompt",
+        "latent_image": "vae_encode"
+      }
+    },
+    "decoder": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": "sampler",
+        "vae": "vae"
+      }
+    },
+    "save_image": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": "decoder",
+        "filename_prefix": "upscaled",
+        "quality": 95,
+        "filename_suffix": ""
+      }
+    }
+  },
+  "inputNodes": {
+    "imageNode": "load_image",
+    "promptNode": "positive_prompt",
+    "negativePromptNode": "negative_prompt",
+    "seedNode": "sampler",
+    "stepsNode": "sampler",
+    "denoiseNode": "sampler",
+    "scaleNode": "upscale_image"
+  },
+  "outputNodes": {
+    "imageNode": "save_image"
+  },
+  "parameterMapping": {
+    "image_url": "image",
+    "prompt": "text",
+    "negative_prompt": "text",
+    "seed": "seed",
+    "steps": "steps",
+    "denoise": "denoise",
+    "scale_factor": "scale_by"
+  }
+}

@@ -1,0 +1,95 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        studio: {
+          50: '#f0f4f8',
+          100: '#d9e2ec',
+          200: '#bcccdc',
+          300: '#9fb3c8',
+          400: '#829ab1',
+          500: '#627d98',
+          600: '#486581',
+          700: '#334e68',
+          800: '#243b53',
+          900: '#102a43',
+          950: '#0a1929',
+        },
+        accent: {
+          50: '#e6fcf5',
+          100: '#c3fae8',
+          200: '#96f2d7',
+          300: '#63e6be',
+          400: '#38d9a9',
+          500: '#20c997',
+          600: '#12b886',
+          700: '#0ca678',
+          800: '#099268',
+          900: '#087f5b',
+        },
+        danger: {
+          50: '#fff5f5',
+          100: '#ffe3e3',
+          200: '#ffc9c9',
+          300: '#ffa8a8',
+          400: '#ff8787',
+          500: '#ff6b6b',
+          600: '#fa5252',
+          700: '#f03e3e',
+          800: '#e03131',
+          900: '#c92a2a',
+        },
+        warning: {
+          50: '#fff9db',
+          100: '#fff3bf',
+          200: '#ffec99',
+          300: '#ffe066',
+          400: '#ffd43b',
+          500: '#fcc419',
+          600: '#fab005',
+          700: '#f59f00',
+          800: '#f08c00',
+          900: '#e67700',
+        },
+        surface: {
+          DEFAULT: '#0f1923',
+          light: '#162432',
+          lighter: '#1e3044',
+          border: '#2a3f55',
+        },
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+      },
+      spacing: {
+        18: '4.5rem',
+        88: '22rem',
+      },
+      animation: {
+        'fade-in': 'fadeIn 0.3s ease-out',
+        'slide-up': 'slideUp 0.3s ease-out',
+        'slide-right': 'slideRight 0.3s ease-out',
+        'pulse-slow': 'pulse 3s ease-in-out infinite',
+      },
+      keyframes: {
+        fadeIn: {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+        slideUp: {
+          '0%': { opacity: '0', transform: 'translateY(10px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        slideRight: {
+          '0%': { opacity: '0', transform: 'translateX(-10px)' },
+          '100%': { opacity: '1', transform: 'translateX(0)' },
+        },
+      },
+    },
+  },
+  plugins: [],
+};

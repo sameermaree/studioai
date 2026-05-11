@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-surface-border;
+  }
+
+  body {
+    @apply bg-surface text-studio-100 font-sans;
+    line-height: 1.5;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.2;
+  }
+
+  html[dir="rtl"] body {
+    font-family: 'Noto Sans Arabic', 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-studio-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-studio-600;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-light border border-surface-border rounded-xl p-6 transition-all duration-200;
+  }
+
+  .card-hover {
+    @apply card hover:border-accent-600/40 hover:shadow-lg hover:shadow-accent-900/10;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 bg-accent-600 hover:bg-accent-500 text-white font-medium rounded-lg
+           transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-surface-lighter hover:bg-studio-700 text-studio-200 font-medium rounded-lg
+           border border-surface-border transition-all duration-200 active:scale-[0.98];
+  }
+
+  .btn-danger {
+    @apply px-4 py-2 bg-danger-700 hover:bg-danger-600 text-white font-medium rounded-lg
+           transition-all duration-200 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply px-3 py-1.5 text-studio-400 hover:text-white hover:bg-surface-lighter rounded-lg
+           transition-all duration-200;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 bg-surface border border-surface-border rounded-lg text-studio-100
+           placeholder:text-studio-500 focus:outline-none focus:border-accent-600 focus:ring-1 focus:ring-accent-600/30
+           transition-all duration-200;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-studio-300 mb-1.5;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full;
+  }
+
+  .badge-accent {
+    @apply badge bg-accent-900/30 text-accent-400 border border-accent-700/30;
+  }
+
+  .badge-warning {
+    @apply badge bg-warning-900/30 text-warning-400 border border-warning-700/30;
+  }
+
+  .badge-danger {
+    @apply badge bg-danger-900/30 text-danger-400 border border-danger-700/30;
+  }
+
+  .badge-blue {
+    @apply badge bg-blue-900/30 text-blue-400 border border-blue-700/30;
+  }
+
+  .section-header {
+    @apply flex items-center justify-between mb-6;
+  }
+
+  .page-title {
+    @apply text-2xl font-bold text-white;
+  }
+
+  .page-subtitle {
+    @apply text-studio-400 mt-1;
+  }
+}
+
+@layer utilities {
+  .rtl-flip {
+    transform: scaleX(1);
+  }
+
+  [dir="rtl"] .rtl-flip {
+    transform: scaleX(-1);
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "id": "img2vid-motion-v1",
+  "name": "Image to Video Motion",
+  "version": "1.0.0",
+  "description": "Add motion to static images to create videos",
+  "model": "Stable Video Diffusion",
+  "type": "img2vid",
+  "metadata": {
+    "creator": "SERI AI Studio",
+    "created_at": "2023-11-10T00:00:00Z",
+    "updated_at": "2023-11-10T00:00:00Z",
+    "default_motion_strength": 0.8,
+    "default_fps": 24,
+    "default_frames": 24,
+    "default_steps": 25
+  },
+  "nodes": {
+    "load_image": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "image.jpg"
+      }
+    },
+    "image_scale": {
+      "class_type": "ImageScale",
+      "inputs": {
+        "image": "load_image",
+        "width": 768,
+        "height": 768,
+        "keep_proportion": true,
+        "crop": "center"
+      }
+    },
+    "svd_img2vid": {
+      "class_type": "SVD_img2vid_Conditioning",
+      "inputs": {
+        "image": "image_scale",
+        "frames": 24,
+        "motion_bucket_id": 127,
+        "fps": 24,
+        "augmentation_level": 0.0
+      }
+    },
+    "svd_sampler": {
+      "class_type": "SVD_img2vid_Sampler",
+      "inputs": {
+        "conditioning": "svd_img2vid",
+        "noise_seed": 42,
+        "steps": 25,
+        "cfg": 2.5,
+        "motion_strength": 0.8
+      }
+    },
+    "create_video": {
+      "class_type": "VHS_VideoCombine",
+      "inputs": {
+        "images": "svd_sampler",
+        "fps": 24,
+        "filename_prefix": "svd_output",
+        "format": "mp4",
+        "quality": 95,
+        "crf": 20
+      }
+    },
+    "save_video": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "video": "create_video",
+        "filename_prefix": "svd_final",
+        "fps": 24,
+        "quality": 95
+      }
+    }
+  },
+  "inputNodes": {
+    "imageNode": "load_image",
+    "sizeNode": "image_scale",
+    "seedNode": "svd_sampler",
+    "stepsNode": "svd_sampler",
+    "motionNode": "svd_sampler",
+    "framesNode": "svd_img2vid",
+    "fpsNode": "create_video"
+  },
+  "outputNodes": {
+    "videoNode": "save_video"
+  },
+  "parameterMapping": {
+    "image_url": "image",
+    "width": "width",
+    "height": "height",
+    "seed": "noise_seed",
+    "steps": "steps",
+    "motion_strength": "motion_strength",
+    "frames": "frames",
+    "fps": "fps"
+  }
+}

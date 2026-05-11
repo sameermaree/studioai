@@ -1,0 +1,93 @@
+{
+  "id": "sdxl-txt2img-v1",
+  "name": "SDXL Text to Image",
+  "version": "1.0.0",
+  "description": "Generate high-quality images using SDXL",
+  "model": "SDXL 1.0",
+  "type": "txt2img",
+  "metadata": {
+    "creator": "SERI AI Studio",
+    "created_at": "2023-10-15T00:00:00Z",
+    "updated_at": "2023-10-15T00:00:00Z",
+    "default_width": 1024,
+    "default_height": 1024,
+    "default_steps": 30,
+    "default_cfg": 7.5,
+    "supports_controlnet": true
+  },
+  "nodes": {
+    "positive_prompt": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "a photograph of an astronaut riding a horse",
+        "clip": "clip"
+      }
+    },
+    "negative_prompt": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry, bad anatomy, bad hands, cropped head",
+        "clip": "clip"
+      }
+    },
+    "empty_latent": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    "sampler": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 42,
+        "steps": 30,
+        "cfg": 7.5,
+        "sampler_name": "euler_a",
+        "scheduler": "karras",
+        "denoise": 1.0,
+        "model": "model",
+        "positive": "positive_prompt",
+        "negative": "negative_prompt",
+        "latent_image": "empty_latent"
+      }
+    },
+    "decoder": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": "sampler",
+        "vae": "vae"
+      }
+    },
+    "save_image": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": "decoder",
+        "filename_prefix": "sdxl_output",
+        "quality": 95,
+        "filename_suffix": ""
+      }
+    }
+  },
+  "inputNodes": {
+    "promptNode": "positive_prompt",
+    "negativePromptNode": "negative_prompt",
+    "sizeNode": "empty_latent",
+    "seedNode": "sampler",
+    "stepsNode": "sampler",
+    "cfgNode": "sampler"
+  },
+  "outputNodes": {
+    "imageNode": "save_image"
+  },
+  "parameterMapping": {
+    "prompt": "text",
+    "negative_prompt": "text",
+    "width": "width",
+    "height": "height",
+    "seed": "seed",
+    "steps": "steps",
+    "cfg_scale": "cfg"
+  }
+}
