@@ -161,10 +161,11 @@ export class StoryGenerator {
       return story;
       
     } catch (error) {
-      console.error('Error in story generation:', error);
+      console.error('CRITICAL: Story generation failed completely:', error);
+      console.error('Requested scene count:', options.estimatedSceneCount);
       
-      // If AI generation fails, return a basic story with minimal structure
-      return this.createBasicStory(premise, options);
+      // NEVER return fake scenes - throw error to show user
+      throw new Error(`Story generation failed: ${error instanceof Error ? error.message : String(error)}. Please check Ollama connection and try again.`);
     }
   }
   

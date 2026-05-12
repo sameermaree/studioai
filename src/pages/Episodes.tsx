@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ScenePromptInspector } from '../components/scene/ScenePromptInspector';
 import type { ElementType, FormEvent } from 'react';
 import {
   Plus,
@@ -408,6 +409,13 @@ function SceneCard({
 
       {expanded && (
         <div className="px-4 pb-4 pt-2 border-t border-surface-border space-y-3 bg-surface/50">
+          <ScenePromptInspector
+            scene={scene}
+            characters={characters}
+            onUpdate={onUpdate}
+          />
+          
+          <div className="border-t border-surface-border pt-3" />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="label text-xs">

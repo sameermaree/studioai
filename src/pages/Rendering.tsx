@@ -1,3 +1,4 @@
+import React from 'react';
 import { MonitorPlay, CheckCircle2, AlertCircle, Clock, Loader2, RotateCcw, XCircle, Film, Plus, Download, Play } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useStudioStore } from '../store/useStudioStore';

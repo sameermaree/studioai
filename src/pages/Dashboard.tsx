@@ -7,12 +7,16 @@ export function Dashboard() {
   const { characters, episodes, prompts, renderJobs } = useStudioStore();
   const { t } = useLanguage();
 
-  const activeRenders = renderJobs.filter((j) => j.status === 'rendering' || j.status === 'queued');
-  const completedRenders = renderJobs.filter((j) => j.status === 'completed');
+  // Filter out null/invalid episodes
+  const validEpisodes = episodes.filter((ep) => ep && ep.id && ep.title && ep.scenes);
+  const validRenderJobs = renderJobs.filter((j) => j && j.id && j.status);
+
+  const activeRenders = validRenderJobs.filter((j) => j.status === 'rendering' || j.status === 'queued');
+  const completedRenders = validRenderJobs.filter((j) => j.status === 'completed');
 
   const stats = [
     { label: t.dashboard.characters, value: characters.length, icon: Users, color: 'text-accent-400', bg: 'bg-accent-900/20' },
-    { label: t.dashboard.episodes, value: episodes.length, icon: Film, color: 'text-blue-400', bg: 'bg-blue-900/20' },
+    { label: t.dashboard.episodes, value: validEpisodes.length, icon: Film, color: 'text-blue-400', bg: 'bg-blue-900/20' },
     { label: t.dashboard.prompts, value: prompts.length, icon: Sparkles, color: 'text-amber-400', bg: 'bg-amber-900/20' },
     { label: t.dashboard.activeRenders, value: activeRenders.length, icon: MonitorPlay, color: 'text-rose-400', bg: 'bg-rose-900/20' },
   ];
@@ -49,23 +53,23 @@ export function Dashboard() {
             </Link>
           </div>
           <div className="space-y-3">
-            {episodes.slice(0, 3).map((ep) => (
+            {validEpisodes.slice(0, 3).map((ep) => (
               <div key={ep.id} className="flex items-center gap-4 p-3 rounded-lg bg-surface hover:bg-surface-lighter transition-colors">
                 <div className="w-16 h-10 rounded-md bg-studio-800 overflow-hidden shrink-0">
-                  {ep?.thumbnail_url && (
-                    <img src={ep.thumbnail_url} alt={ep.title} className="w-full h-full object-cover" />
+                  {ep.thumbnail_url && (
+                    <img src={ep.thumbnail_url} alt={ep.title || 'Episode'} className="w-full h-full object-cover" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-white truncate">{ep.title}</p>
+                  <p className="text-sm font-medium text-white truncate">{ep.title || 'Untitled Episode'}</p>
                   <p className="text-xs text-studio-400">
-                    {ep.scenes.length} {t.episodes.scenes.toLowerCase()}
+                    {ep.scenes?.length || 0} {t.episodes.scenes.toLowerCase()}
                   </p>
                 </div>
                 <StatusBadge status={ep.status} />
               </div>
             ))}
-            {episodes.length === 0 && (
+            {validEpisodes.length === 0 && (
               <p className="text-sm text-studio-500 text-center py-4">{t.episodes.noEpisodes}</p>
             )}
           </div>
@@ -120,13 +124,13 @@ export function Dashboard() {
           </div>
           <div className="text-center p-4 rounded-lg bg-surface">
             <p className="text-2xl font-bold text-blue-400">
-              {episodes.reduce((sum, ep) => sum + ep.scenes.length, 0)}
+              {validEpisodes.reduce((sum, ep) => sum + (ep.scenes?.length || 0), 0)}
             </p>
             <p className="text-xs text-studio-400 mt-1">{t.dashboard.totalScenes}</p>
           </div>
           <div className="text-center p-4 rounded-lg bg-surface">
             <p className="text-2xl font-bold text-amber-400">
-              {episodes.reduce((sum, ep) => sum + (ep.duration_estimate ?? 0), 0)}s
+              {validEpisodes.reduce((sum, ep) => sum + (ep.duration_estimate ?? 0), 0)}s
             </p>
             <p className="text-xs text-studio-400 mt-1">{t.dashboard.totalDuration}</p>
           </div>

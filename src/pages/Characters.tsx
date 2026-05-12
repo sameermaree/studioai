@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { cinematicPresets } from '../config/presets/cinematicPresets';
+import { voicePresets } from '../config/presets/voicePresets';
 import { Plus, Lock, Unlock, Tag, Trash2, CreditCard as Edit2, X, Image, Mic2, Palette } from 'lucide-react';
 import { useStudioStore } from '../store/useStudioStore';
 import { useLanguage } from '../hooks/useLanguage';
@@ -208,6 +210,7 @@ function CharacterModal({
   const [emotions, setEmotions] = useState(character?.emotions.join(', ') ?? '');
   const [imageUrl, setImageUrl] = useState(character?.image_url ?? '');
   const [voiceId, setVoiceId] = useState(character?.voice_id ?? '');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [stylePresetId, setStylePresetId] = useState(character?.style_preset_id ?? '');
   const [personalityNotes, setPersonalityNotes] = useState(character?.personality_notes ?? '');
   const [cinematicNotes, setCinematicNotes] = useState(character?.cinematic_notes ?? '');
@@ -267,7 +270,35 @@ function CharacterModal({
             </div>
             <div>
               <label className="label">{t.characters.imageUrl}</label>
-              <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} className="input" placeholder="https://..." />
+              <div className="flex gap-2">
+                <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} className="input flex-1" placeholder="https://..." />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const localPath = `assets/characters/${Date.now()}-${file.name.replace(/[^a-z0-9.]/gi, '_')}`;
+                      setImageUrl(localPath);
+                    }
+                  }}
+                />
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="btn-secondary whitespace-nowrap px-3">Upload</button>
+              </div>
+              {imageUrl && (
+                <div className="mt-2 w-20 h-20 rounded-lg bg-studio-800 overflow-hidden">
+                  <img src={imageUrl} alt="Preview" className="w-full h-full object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="label">Voice</label>
+              <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)} className="input">
+                <option value="">--</option>
+                {voicePresets.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
             </div>
           </div>
           <div>
@@ -296,6 +327,7 @@ function CharacterModal({
               <label className="label">{t.characters.cinematicStyle}</label>
               <select value={stylePresetId} onChange={(e) => setStylePresetId(e.target.value)} className="input">
                 <option value="">--</option>
+                {cinematicPresets.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                 {stylePresets.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>

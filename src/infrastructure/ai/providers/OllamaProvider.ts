@@ -125,17 +125,34 @@ Just output raw, valid, parseable JSON.
       const result = await this.generateText(jsonPrompt, options);
       const text = result.text.trim();
       
+      console.log('Ollama raw response length:', text.length);
+      console.log('Ollama raw response preview:', text.substring(0, 150));
+      
       // Extract clean JSON using helper function
       const cleanJson = extractJsonFromText(text);
+      console.log('Extracted JSON length:', cleanJson.length);
+      console.log('Extracted JSON preview:', cleanJson.substring(0, 150));
       
       // Try to parse JSON
       try {
-        return JSON.parse(cleanJson) as T;
+        const parsed = JSON.parse(cleanJson) as T;
+        
+        // Validate it's not empty
+        if (typeof parsed === 'object' && parsed !== null) {
+          if ('scenes' in parsed && Array.isArray(parsed.scenes)) {
+            if (parsed.scenes.length === 0) {
+              throw new Error('Ollama returned empty scenes array');
+            }
+            console.log(`Ollama returned ${parsed.scenes.length} scenes`);
+          }
+        }
+        
+        return parsed;
       } catch (parseError) {
         console.error('JSON.parse failed:', parseError);
-        console.error('Raw text:', text.substring(0, 200));
-        console.error('Extracted JSON:', cleanJson.substring(0, 200));
-        throw new Error(`Invalid JSON structure: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        console.error('Raw text (first 300 chars):', text.substring(0, 300));
+        console.error('Extracted JSON (first 300 chars):', cleanJson.substring(0, 300));
+        throw new Error(`Ollama JSON parsing failed: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       }
     } catch (error) {
       console.error('Ollama generateJSON error:', error);

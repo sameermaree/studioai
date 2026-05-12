@@ -278,12 +278,11 @@ export class FFmpegService {
     const pixelsPerFrame = width * height;
     const bitsPerSecond = pixelsPerFrame * bitsPerPixel * frameRate;
     const bytesPerSecond = bitsPerSecond / 8;
-    const totalBytes = bytesPerSecond * duration;
+    let totalBytes = bytesPerSecond * duration;
     
     // Add audio size if included (rough estimate)
-    let audioBytesPerSecond = 0;
     if (includeAudio) {
-      audioBytesPerSecond = 128 * 1000 / 8; // 128 kbps
+      const audioBytesPerSecond = 128 * 1000 / 8; // 128 kbps
       totalBytes += audioBytesPerSecond * duration;
     }
     

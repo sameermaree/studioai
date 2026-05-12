@@ -1,7 +1,6 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Character, Episode, Prompt, Voice, RenderJob, PublishTarget, StylePreset, MediaAsset, SubtitleTrack } from '../types';
-import { mockCharacters, mockEpisodes, mockPrompts, mockVoices, mockRenderJobs, mockPublishTargets, mockMediaAssets, mockSubtitleTracks } from '../data/mock';
+import { mockVoices, mockPublishTargets, mockMediaAssets } from '../data/mock';
 import { systemStylePresets } from '../data/stylePresets';
 
 interface StudioState {
@@ -55,49 +54,126 @@ interface StudioState {
   deleteSubtitleTrack: (id: string) => void;
 }
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 
-export const useStudioStore = create<StudioState>()(
-  persist(
-    (set) => ({
-      characters: mockCharacters,
-      episodes: mockEpisodes,
-      prompts: mockPrompts,
+// Save to backend file API
+const saveProjectNow = async (getState: () => StudioState) => {
+  try {
+    const state = getState();
+    const payload = {
+      episodes: state.episodes || [],
+      characters: state.characters || [],
+      prompts: state.prompts || [],
+      voices: state.voices || [],
+      renderJobs: state.renderJobs || [],
+      mediaAssets: state.mediaAssets || [],
+      subtitleTracks: state.subtitleTracks || [],
+      stylePresets: state.stylePresets || [],
+      publishTargets: state.publishTargets || [],
+      sidebarOpen: state.sidebarOpen,
+      savedAt: new Date().toISOString()
+    };
+    
+    // Save to file via backend
+    await fetch('http://localhost:3001/api/project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    console.log(`✓ SAVED to file: Episodes=${payload.episodes.length}, Characters=${payload.characters.length}`);
+  } catch (error) {
+    console.error('Save failed:', error);
+  }
+};
+
+// Load from backend on startup
+let initialData: Partial<StudioState> = {};
+
+if (typeof window !== 'undefined') {
+  fetch('http://localhost:3001/api/project')
+    .then(res => res.json())
+    .then(data => {
+      console.log(`✓ LOADED from file: Episodes=${data.episodes?.length || 0}, Characters=${data.characters?.length || 0}`);
+      // Reload store with loaded data
+      useStudioStore.setState(data);
+    })
+    .catch(() => console.log('Backend not available - starting fresh'));
+}
+
+export const useStudioStore = create<StudioState>()((set, get) => ({
+      characters: (initialData.characters as Character[]) || [],
+      episodes: (initialData.episodes as Episode[]) || [],
+      prompts: (initialData.prompts as Prompt[]) || [],
       voices: mockVoices,
-      renderJobs: mockRenderJobs,
+      renderJobs: (initialData.renderJobs as RenderJob[]) || [],
       publishTargets: mockPublishTargets,
       stylePresets: systemStylePresets,
-      mediaAssets: mockMediaAssets,
-      subtitleTracks: mockSubtitleTracks,
+      mediaAssets: (initialData.mediaAssets as MediaAsset[]) || [],
+      subtitleTracks: (initialData.subtitleTracks as SubtitleTrack[]) || [],
       sidebarOpen: true,
 
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 
-      addCharacter: (character) => set((s) => ({ characters: [...s.characters, character] })),
-      updateCharacter: (id, updates) =>
-        set((s) => ({ characters: s.characters.map((c) => (c.id === id ? { ...c, ...updates, updated_at: new Date().toISOString() } : c)) })),
-      deleteCharacter: (id) => set((s) => ({ characters: s.characters.filter((c) => c.id !== id) })),
+      addCharacter: (character) => {
+        set((s) => ({ characters: [...s.characters, character] }));
+        saveProjectNow(get);
+        console.log('[CHARACTER CONSISTENCY READY]', character.name);
+      },
+      updateCharacter: (id, updates) => {
+        set((s) => ({ characters: s.characters.map((c) => (c.id === id ? { ...c, ...updates, updated_at: new Date().toISOString() } : c)) }));
+        saveProjectNow(get);
+      },
+      deleteCharacter: (id) => {
+        set((s) => ({ characters: s.characters.filter((c) => c.id !== id) }));
+        saveProjectNow(get);
+      },
 
-      addEpisode: (episode) => set((s) => ({ episodes: [...s.episodes, episode] })),
-      updateEpisode: (id, updates) =>
-        set((s) => ({ episodes: s.episodes.map((e) => (e.id === id ? { ...e, ...updates, updated_at: new Date().toISOString() } : e)) })),
-      deleteEpisode: (id) => set((s) => ({ episodes: s.episodes.filter((e) => e.id !== id) })),
+      addEpisode: (episode) => {
+        set((s) => ({ episodes: [...s.episodes, episode] }));
+        saveProjectNow(get);
+        console.log('[PROJECT SAVED] Episode added:', episode.title);
+      },
+      updateEpisode: (id, updates) => {
+        set((s) => ({ episodes: s.episodes.map((e) => (e.id === id ? { ...e, ...updates, updated_at: new Date().toISOString() } : e)) }));
+        saveProjectNow(get);
+      },
+      deleteEpisode: (id) => {
+        set((s) => ({ episodes: s.episodes.filter((e) => e.id !== id) }));
+        saveProjectNow(get);
+      },
 
-      addPrompt: (prompt) => set((s) => ({ prompts: [...s.prompts, prompt] })),
-      updatePrompt: (id, updates) =>
-        set((s) => ({ prompts: s.prompts.map((p) => (p.id === id ? { ...p, ...updates, updated_at: new Date().toISOString() } : p)) })),
-      deletePrompt: (id) => set((s) => ({ prompts: s.prompts.filter((p) => p.id !== id) })),
+      addPrompt: (prompt) => {
+        set((s) => ({ prompts: [...s.prompts, prompt] }));
+        saveProjectNow(get);
+      },
+      updatePrompt: (id, updates) => {
+        set((s) => ({ prompts: s.prompts.map((p) => (p.id === id ? { ...p, ...updates, updated_at: new Date().toISOString() } : p)) }));
+        saveProjectNow(get);
+      },
+      deletePrompt: (id) => {
+        set((s) => ({ prompts: s.prompts.filter((p) => p.id !== id) }));
+        saveProjectNow(get);
+      },
 
       addVoice: (voice) => set((s) => ({ voices: [...s.voices, voice] })),
       updateVoice: (id, updates) =>
         set((s) => ({ voices: s.voices.map((v) => (v.id === id ? { ...v, ...updates } : v)) })),
       deleteVoice: (id) => set((s) => ({ voices: s.voices.filter((v) => v.id !== id) })),
 
-      addRenderJob: (job) => set((s) => ({ renderJobs: [job, ...s.renderJobs] })),
-      updateRenderJob: (id, updates) =>
-        set((s) => ({ renderJobs: s.renderJobs.map((j) => (j.id === id ? { ...j, ...updates } : j)) })),
-      deleteRenderJob: (id) => set((s) => ({ renderJobs: s.renderJobs.filter((j) => j.id !== id) })),
+      addRenderJob: (job) => {
+        set((s) => ({ renderJobs: [job, ...s.renderJobs] }));
+        saveProjectNow(get);
+      },
+      updateRenderJob: (id, updates) => {
+        set((s) => ({ renderJobs: s.renderJobs.map((j) => (j.id === id ? { ...j, ...updates } : j)) }));
+        saveProjectNow(get);
+      },
+      deleteRenderJob: (id) => {
+        set((s) => ({ renderJobs: s.renderJobs.filter((j) => j.id !== id) }));
+        saveProjectNow(get);
+      },
 
       addPublishTarget: (target) => set((s) => ({ publishTargets: [...s.publishTargets, target] })),
       updatePublishTarget: (id, updates) =>
@@ -112,57 +188,16 @@ export const useStudioStore = create<StudioState>()(
       addMediaAsset: (asset) => set((s) => ({ mediaAssets: [...s.mediaAssets, asset] })),
       deleteMediaAsset: (id) => set((s) => ({ mediaAssets: s.mediaAssets.filter((a) => a.id !== id) })),
 
-      addSubtitleTrack: (track) => set((s) => ({ subtitleTracks: [...s.subtitleTracks, track] })),
-      updateSubtitleTrack: (id, updates) =>
-        set((s) => ({ subtitleTracks: s.subtitleTracks.map((t) => (t.id === id ? { ...t, ...updates, updated_at: new Date().toISOString() } : t)) })),
-      deleteSubtitleTrack: (id) => set((s) => ({ subtitleTracks: s.subtitleTracks.filter((t) => t.id !== id) })),
-    }),
-    {
-      name: 'ai-studio-store',
-      version: STORE_VERSION,
-      storage: createJSONStorage(() => {
-        return {
-          getItem: (name: string) => {
-            try {
-              return localStorage.getItem(name);
-            } catch {
-              return null;
-            }
-          },
-          setItem: (name: string, value: string) => {
-            try {
-              localStorage.setItem(name, value);
-            } catch {
-              // Storage full or unavailable - fail silently
-            }
-          },
-          removeItem: (name: string) => {
-            try {
-              localStorage.removeItem(name);
-            } catch {
-              // fail silently
-            }
-          },
-        };
-      }),
-      partialize: (state) => ({
-        characters: state.characters,
-        episodes: state.episodes,
-        prompts: state.prompts,
-        voices: state.voices,
-        renderJobs: state.renderJobs,
-        publishTargets: state.publishTargets,
-        stylePresets: state.stylePresets,
-        mediaAssets: state.mediaAssets,
-        subtitleTracks: state.subtitleTracks,
-        sidebarOpen: state.sidebarOpen,
-      }),
-      migrate: (persistedState: unknown, version: number) => {
-        if (version === 0 || !persistedState) {
-          return {};
-        }
-        return persistedState as Record<string, unknown>;
+      addSubtitleTrack: (track) => {
+        set((s) => ({ subtitleTracks: [...s.subtitleTracks, track] }));
+        saveProjectNow(get);
       },
-    }
-  )
-);
+      updateSubtitleTrack: (id, updates) => {
+        set((s) => ({ subtitleTracks: s.subtitleTracks.map((t) => (t.id === id ? { ...t, ...updates, updated_at: new Date().toISOString() } : t)) }));
+        saveProjectNow(get);
+      },
+      deleteSubtitleTrack: (id) => {
+        set((s) => ({ subtitleTracks: s.subtitleTracks.filter((t) => t.id !== id) }));
+        saveProjectNow(get);
+      },
+    }));
