@@ -75,7 +75,16 @@ export class StoryGenerator {
     const storyTitle = options.title || await this.generateTitle(premise, metadata);
     let story = createStory(storyTitle, premise, metadata);
     
+    // Check provider availability BEFORE attempting generation
+    // DeepSeek is primary, Ollama is fallback (configured in ai.ts preferences)
     try {
+      const narrativeProviders = await this.aiRegistry.getFallbackChain('narrative-structure');
+      if (narrativeProviders.length === 0) {
+        throw new Error('All AI providers are unavailable. DeepSeek API key may be missing or Ollama is not running. Set VITE_DEEPSEEK_API_KEY or start Ollama.');
+      }
+      console.log('[STORY GENERATOR] Available providers:', narrativeProviders.map(p => p.id).join(', '));
+      console.log('[STORY GENERATOR] Primary:', narrativeProviders[0]?.id, '| Fallback:', narrativeProviders[1]?.id || 'none');
+
       // Generate narrative structure
       const narrativeStructure = await this.generateNarrativeStructure(premise, options);
       
@@ -220,12 +229,14 @@ Return only the title without quotes or additional text.`;
     premise: string, 
     options: StoryGenerationOptions
   ): Promise<NarrativeStructureResponse> {
-    // Get AI providers for narrative structure
+    // Get AI providers for narrative structure (DeepSeek primary, Ollama fallback)
     const providers = await this.aiRegistry.getFallbackChain('narrative-structure');
     
     if (providers.length === 0) {
-      throw new Error('No available AI providers for narrative structure generation');
+      throw new Error('Story generation unavailable: No AI providers available. Set VITE_DEEPSEEK_API_KEY or start Ollama.');
     }
+    console.log('[NARRATIVE STRUCTURE] Available providers:', providers.map(p => p.id).join(', '));
+    console.log('[NARRATIVE STRUCTURE] Using provider:', providers[0]?.id);
     
     // Prepare characters for prompt
     const characterDescriptions = options.characters 
@@ -300,12 +311,14 @@ Make sure each narrative element description is detailed and provides clear guid
     story: Story, 
     options: StoryGenerationOptions
   ): Promise<SceneStructureResponse> {
-    // Get AI providers for scene generation
+    // Get AI providers for scene generation (DeepSeek primary, Ollama fallback)
     const providers = await this.aiRegistry.getFallbackChain('scene-generation');
     
     if (providers.length === 0) {
-      throw new Error('No available AI providers for scene generation');
+      throw new Error('Scene generation unavailable: No AI providers available. Set VITE_DEEPSEEK_API_KEY or start Ollama.');
     }
+    console.log('[SCENE STRUCTURE] Available providers:', providers.map(p => p.id).join(', '));
+    console.log('[SCENE STRUCTURE] Using provider:', providers[0]?.id);
     
     // Use EXACT scene count from options, no fallback calculation
     const sceneCount = options.estimatedSceneCount || 3;

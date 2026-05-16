@@ -86,15 +86,17 @@ export class ComfyUIHealthCheck {
         const wasAvailable = this.status.available;
         
         // Get GPU information if available
-        const hasGpu = data?.system?.devices?.some((d: any) => 
+        const devices = data?.devices || data?.system?.devices || [];
+        const hasGpu = devices.some((d: any) => 
           d.type === 'cuda' || d.type === 'mps' || d.type === 'rocm'
         );
+        const gpuName = devices.length > 0 ? devices.map((d: any) => d.name).join(', ') : '';
         
         // Update status
         this.status = {
           available: true,
           lastCheck: new Date(),
-          message: `ComfyUI is available. GPU: ${hasGpu ? 'Yes' : 'No'}`,
+          message: `ComfyUI available | GPU: ${gpuName || (hasGpu ? 'Yes' : 'No')}`,
           latency,
           systemInfo: data.system,
           queueInfo: data.queue

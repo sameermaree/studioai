@@ -1,0 +1,446 @@
+﻿/**
+ * CharacterImageGenerator
+ *
+ * Generates character reference images ONLY from Character Library entries
+ * (CharacterBibleEntry). Uses the locked identity pipeline:
+ * CharacterBibleEntry.character_prompt â†’ ComfyUI â†’ CharacterBibleEntry.reference_image_path
+ *
+ * Architecture rules:
+ * - Character generation happens ONLY from Character Library entries
+ * - Stable identity pipeline is mandatory
+ * - No character identity regeneration during scene generation
+ */
+
+import type { CharacterBibleEntry } from '../../types';
+import { buildCharacterPortraitPrompt, buildCharacterPortraitNegative } from '../character/CharacterPromptBuilder';
+import { getStyleKeywords } from "../character/CharacterPromptBuilder";
+import { buildStylePrefix, buildStyleNegative, getStyleFamilyLabel, classifyStyleIds } from "../style/StyleFamilyRouter";
+import { selectCheckpoint, selectWorkflow, getPrimaryStyleFamily } from "../style/StyleWorkflowRouter";
+import type { ProgressState } from './GenerationProgressTracker';
+import { makeProgress, makeError, DONE_PROGRESS, globalProgressTracker, makeGenerationKey } from './GenerationProgressTracker';
+import { ComfyUIProvider } from '../../infrastructure/ai/providers/ComfyUIProvider';
+
+export interface CharacterGenerationResult {
+  entry: CharacterBibleEntry;
+  /** The path to the generated reference image */
+  referenceImagePath: string | null;
+  success: boolean;
+  error?: string;
+}
+
+export type CharacterProgressCallback = (progress: ProgressState) => void;
+
+/**
+ * Generate a single character reference image from a CharacterBibleEntry.
+ * Uses the character_prompt / buildCharacterPortraitPrompt to create a stable identity image.
+ *
+ * @param entry - The CharacterBibleEntry to generate an image for
+ * @param onProgress - Optional progress callback
+ * @returns The updated entry with reference_image_path set
+ */
+/**
+ * Strictly sanitize a prompt for ComfyUI.
+ * Removes:
+ * - JSON fragments, braces {}, brackets [], quotes ""
+ * - debug labels, malformed key/value text
+ * - repeated commas, empty attributes
+ * - duplicated words like "to, to, to"
+ * - non-prompt garbage
+ * Keeps only clean natural-language comma-separated prompt phrases.
+ */
+function sanitizeFinalPromptForComfyUI(raw: string): string {
+  if (!raw) return "";
+
+  let cleaned = raw;
+
+  // Remove JSON-like objects: {...} and [...]
+  cleaned = cleaned.replace(/\{[^}]*\}/g, "");
+  cleaned = cleaned.replace(/\[[^\]]*\]/g, "");
+
+  // Remove quotes (single and double)
+  cleaned = cleaned.replace(/["']/g, "");
+
+  // Remove debug labels like [LABEL] or [LABEL text]
+  cleaned = cleaned.replace(/\[[\w\s-]+\]/g, "");
+
+  // Remove repeated "to, to, to" patterns
+  cleaned = cleaned.replace(/(\bto\b\s*,?\s*){2,}/gi, "");
+
+  // Remove repeated "at, at, at" patterns
+  cleaned = cleaned.replace(/(\bat\b\s*,?\s*){2,}/gi, "");
+
+  // Remove repeated "or, or, or" patterns
+  cleaned = cleaned.replace(/(\bor\b\s*,?\s*){2,}/gi, "");
+
+  // Remove key:value patterns (malformed object-like text)
+  cleaned = cleaned.replace(/\b\w+\s*:\s*\w+/g, "");
+
+  // Collapse repeated commas
+  cleaned = cleaned.replace(/,{2,}/g, ",");
+
+  // Remove comma-space-comma patterns
+  cleaned = cleaned.replace(/,\s*,/g, ",");
+
+  // Remove empty parentheses
+  cleaned = cleaned.replace(/\(\s*\)/g, "");
+
+  // Remove leading/trailing commas and spaces
+  cleaned = cleaned.replace(/^[,\s]+/, "");
+  cleaned = cleaned.replace(/[,\s]+$/, "");
+
+  // Collapse multiple spaces into one
+  cleaned = cleaned.replace(/\s+/g, " ");
+
+  // Remove any remaining non-printable characters
+  cleaned = cleaned.replace(/[^\x20-\x7E,.\s]/g, "");
+
+  // Final trim
+  cleaned = cleaned.trim();
+
+  // If after cleaning the prompt is empty or too short, return a safe default
+  if (!cleaned || cleaned.length < 10) {
+    return 'Pixar-style 3D animated character, Disney-inspired stylized face, large expressive eyes, rounded facial features, stylized anatomy, toy-like materials, smooth 3D shading, non-photorealistic, animated movie character, family animation style, cute proportions, slightly oversized head, soft cinematic cartoon lighting, highly stylized, colorful animated film aesthetic';
+  }
+
+  return cleaned;
+}
+
+/**
+ * Extract locked appearance traits from a CharacterBibleEntry.
+ * These traits are saved and reused for future scene generation.
+ */
+function extractAppearanceTraits(entry: CharacterBibleEntry, positivePrompt: string): {
+  hairstyle: string;
+  hair_color: string;
+  eye_color: string;
+  outfit: string;
+  age_range: string;
+  facial_structure: string;
+  body_proportions: string;
+  style_type: string;
+} {
+  // Extract hairstyle from the hair field
+  const hairLower = (entry.hair || '').toLowerCase();
+  let hairstyle = entry.hair || '';
+  // Try to detect hair color from hair string
+  const hairColors = ['blonde', 'blond', 'brown', 'black', 'red', 'ginger', 'auburn', 'white', 'gray', 'grey', 'golden', 'chestnut', 'dark', 'light'];
+  let hairColor = '';
+  for (const c of hairColors) {
+        if (hairLower.includes(c)) {
+          hairColor = c;
+          break;
+        }
+  }
+
+  // Eye color from the eyes field
+  const eyesLower = (entry.eyes || '').toLowerCase();
+  const eyeColors = ['blue', 'brown', 'green', 'hazel', 'gray', 'grey', 'black', 'amber', 'violet'];
+  let eyeColor = '';
+  for (const c of eyeColors) {
+        if (eyesLower.includes(c)) {
+          eyeColor = c;
+          break;
+        }
+  }
+
+  // Age range
+  const age = entry.age;
+  let ageRange = '';
+  if (age <= 0) ageRange = '';
+  else if (age <= 3) ageRange = 'toddler';
+  else if (age <= 6) ageRange = 'young child';
+  else if (age <= 10) ageRange = 'child';
+  else if (age <= 13) ageRange = 'preteen';
+  else if (age <= 17) ageRange = 'teenager';
+  else if (age <= 30) ageRange = 'young adult';
+  else if (age <= 45) ageRange = 'adult';
+  else ageRange = 'older adult';
+
+  // Detect style type from prompt
+  const promptLower = positivePrompt.toLowerCase();
+  let styleType = '3D animated'; // default
+  if (promptLower.includes('pixar')) styleType = 'Pixar-style 3D';
+  else if (promptLower.includes('disney')) styleType = 'Disney-style 3D';
+  else if (promptLower.includes('anime') || promptLower.includes('manga')) styleType = 'anime';
+  else if (promptLower.includes('realistic') || promptLower.includes('photorealistic')) styleType = 'realistic';
+  else if (promptLower.includes('cinematic')) styleType = 'cinematic 3D';
+  else if (promptLower.includes('cartoon') || promptLower.includes('toon')) styleType = 'cartoon 3D';
+
+  return {
+        hairstyle: hairstyle || 'default hairstyle',
+        hair_color: hairColor || 'default hair color',
+        eye_color: eyeColor || (entry.eyes || 'default eye color'),
+        outfit: entry.outfit || 'default outfit',
+        age_range: ageRange || 'child',
+        facial_structure: 'stylized facial features consistent with reference image',
+        body_proportions: 'stylized proportions consistent with reference image',
+        style_type: styleType,
+  };
+}
+
+export async function generateCharacterImage(
+  entry: CharacterBibleEntry,
+  onProgress?: CharacterProgressCallback,
+  stylePresetIds?: string[]
+): Promise<CharacterGenerationResult> {
+  const genKey = makeGenerationKey('character-image', entry.id);
+
+  if (!globalProgressTracker.tryClaim(genKey)) {
+        return {
+          entry,
+          referenceImagePath: null,
+          success: false,
+          error: `Character "${entry.name}" image generation is already in progress.`,
+        };
+  }
+
+  try {
+        onProgress?.(
+          makeProgress({
+            phase: 'Generating character image',
+            currentItem: 1,
+            totalItems: 1,
+            label: `Generating character: ${entry.name}`,
+          })
+        );
+
+                // ========== CHECK FOR LOCKED PARAMETERS ==========
+        // If identity is locked, reuse the same seed, workflow, and checkpoint
+        // to ensure consistent identity.
+        const isIdentityLocked = entry.identityLocked && entry.seed !== null && entry.workflow_path !== null && entry.checkpoint !== null;
+        console.log('[CONSISTENCY] identityLocked:', isIdentityLocked, '| Character:', entry.name);
+
+        // ========== STYLE WORKFLOW ROUTING ==========
+        const selectedCheckpoint = isIdentityLocked
+          ? entry.checkpoint!
+          : (stylePresetIds && stylePresetIds.length > 0)
+            ? selectCheckpoint(stylePresetIds)
+            : 'juggernautXL_v9Rundiffusionphoto2.safetensors';
+        const selectedWorkflow = isIdentityLocked
+          ? entry.workflow_path!
+          : (stylePresetIds && stylePresetIds.length > 0)
+            ? selectWorkflow(stylePresetIds)
+            : 'workflows/default_txt2img.json';
+        const workflowFamily = (stylePresetIds && stylePresetIds.length > 0)
+          ? getPrimaryStyleFamily(stylePresetIds)
+          : 'unknown';
+                const activeStyleIds = isIdentityLocked ? entry.style_preset_ids : (stylePresetIds || []);
+        const debugSeed = isIdentityLocked ? entry.seed! : (entry.seed ?? Math.floor(Math.random() * 2147483647));
+
+        console.log('[CONSISTENCY] seed:', debugSeed);
+        console.log('[CONSISTENCY] workflow:', selectedWorkflow);
+        console.log('[CONSISTENCY] checkpoint:', selectedCheckpoint);
+        console.log('[CONSISTENCY] stylePresetIds:', activeStyleIds);
+
+        // ========== BUILD PROMPTS ==========
+        // Use locked prompts if available, otherwise build fresh
+        let finalPositivePrompt: string;
+        let finalNegativePrompt: string;
+
+        // ===== DEBUG RAW PROMPT VIEWER =====
+        const userBasePrompt = entry.character_prompt || '';
+        console.log('');
+        console.log('========== DEBUG PROMPT TRACE ==========');
+        console.log('[USER] character_prompt:', userBasePrompt);
+        console.log('[USER] visual_description:', entry.visual_description);
+        console.log('[USER] outfit:', entry.outfit);
+        console.log('[USER] hair:', entry.hair);
+        console.log('[USER] eyes:', entry.eyes);
+        console.log('[USER] art_style:', entry.art_style);
+        console.log('[USER] negative_prompt:', entry.negative_prompt);
+        console.log('[USER] scene_injection_prompt:', entry.scene_injection_prompt);
+        console.log('[STYLE PRESETS INPUT]:', JSON.stringify(stylePresetIds));
+        console.log('[IDENTITY LOCKED]:', isIdentityLocked);
+        console.log('========================================');
+        console.log('');
+
+        if (isIdentityLocked && entry.generation_positive_prompt) {
+          // Reuse the exact same prompts that produced the reference image
+          finalPositivePrompt = entry.generation_positive_prompt;
+          finalNegativePrompt = entry.generation_negative_prompt || '';
+          console.log('[CONSISTENCY] Reusing locked prompts from previous generation');
+          console.log('[LOCKED PROMPT]', finalPositivePrompt);
+        } else {
+          // Build fresh prompts using the character's data
+          const styleFamily = (stylePresetIds && stylePresetIds.length > 0)
+            ? classifyStyleIds(stylePresetIds).find(f => f !== 'cinematic' && f !== 'unknown') || 'unknown'
+            : 'unknown';
+          console.log('[BASE CHARACTER PROMPT] styleFamily:', styleFamily);
+
+          // Build base prompts
+          let positivePrompt: string;
+          let negativePrompt: string;
+
+          // BUG FIX: If user has written a custom character_prompt, always use it directly
+          // without injecting visual_description, outfit, hair, eyes, or art_style
+          if (entry.character_prompt && entry.character_prompt.trim().length > 10) {
+            console.log('[PROMPT SOURCE] Using user-written character_prompt directly (NO injection)');
+            positivePrompt = entry.character_prompt;
+            negativePrompt = entry.negative_prompt || buildCharacterPortraitNegative(entry, styleFamily);
+          } else if (styleFamily === 'cartoon') {
+            console.log('[PROMPT SOURCE] No user prompt found, using cartoon fallback template');
+            positivePrompt = (
+              '(Pixar-style 3D animated character:1.5), ' +
+              '(Disney cinematic animated film:1.4), ' +
+              '(stylized 3D render:1.4), ' +
+              '(high-end animated movie frame:1.3), ' +
+              '(subsurface scattering:1.2), ' +
+              '(global illumination:1.2), ' +
+              '(soft cinematic volumetric lighting:1.2), ' +
+              'large expressive eyes, ' +
+              'rounded facial features, ' +
+              'stylized anatomy, ' +
+              'toy-like materials, ' +
+              'smooth 3D shading, ' +
+              'cute proportions, ' +
+              'slightly oversized head, ' +
+              'colorful animated film aesthetic'
+            );
+            negativePrompt = (
+              '(photorealistic:1.5), ' +
+              '(real human skin:1.5), ' +
+              '(fashion photography:1.4), ' +
+              '(stock photo:1.4), ' +
+              '(realistic anatomy:1.3), ' +
+              '(live action:1.3), ' +
+              'studio portrait, ' +
+              'skin pores, ' +
+              'realistic skin texture, ' +
+              'documentary, ' +
+              'adult proportions, ' +
+              'anime, manga, 2D, illustration, comic, sketch, line art, ' +
+              'flat shading, cel shading, black outline, monochrome, drawing'
+            );
+          } else {
+            console.log('[PROMPT SOURCE] No user prompt, building from builder (may inject appearance fields)');
+            positivePrompt = entry.character_prompt || buildCharacterPortraitPrompt(entry, styleFamily);
+            negativePrompt = buildCharacterPortraitNegative(entry, styleFamily);
+          }
+          console.log('[BUILT/PASSED] positivePrompt (before style merge):', positivePrompt);
+          console.log('[BUILT/PASSED] negativePrompt (before style merge):', negativePrompt);
+
+          // Merge style keywords if style presets are active
+          finalPositivePrompt = positivePrompt;
+          finalNegativePrompt = negativePrompt;
+
+          if (stylePresetIds && stylePresetIds.length > 0) {
+            const combinedStyle = stylePresetIds
+              .map(id => getStyleKeywords(id))
+              .filter(Boolean)
+              .join('. ');
+            const stylePrefix = buildStylePrefix(stylePresetIds);
+            const styleNegativeAdditions = buildStyleNegative(stylePresetIds);
+
+            console.log('[STYLE INJECTION] combinedStyle:', combinedStyle);
+            console.log('[STYLE INJECTION] stylePrefix:', stylePrefix);
+            console.log('[STYLE INJECTION] styleNegativeAdditions:', styleNegativeAdditions);
+
+            const prefixParts = [combinedStyle, stylePrefix].filter(Boolean);
+            const fullPrefix = prefixParts.join(', ');
+            if (fullPrefix) {
+              finalPositivePrompt = fullPrefix + ', ' + positivePrompt;
+              console.log('[STYLE INJECTION] Prepended style prefix. Result:', finalPositivePrompt);
+            }
+            if (styleNegativeAdditions) {
+              finalNegativePrompt = (negativePrompt ? negativePrompt + ', ' : '') + styleNegativeAdditions;
+              console.log('[STYLE INJECTION] Appended style negatives. Result:', finalNegativePrompt);
+            }
+          }
+
+          // Log prompt before sanitization
+          console.log('[BEFORE SANITIZE] finalPositivePrompt:', finalPositivePrompt);
+          console.log('[BEFORE SANITIZE] finalNegativePrompt:', finalNegativePrompt);
+
+          // Apply prompt sanitization
+          finalPositivePrompt = sanitizeFinalPromptForComfyUI(finalPositivePrompt);
+          finalNegativePrompt = sanitizeFinalPromptForComfyUI(finalNegativePrompt);
+          console.log('[AFTER SANITIZE] finalPositivePrompt:', finalPositivePrompt);
+          console.log('[AFTER SANITIZE] finalNegativePrompt:', finalNegativePrompt);
+        }
+
+        console.log('[STYLE WORKFLOW ROUTER] workflowFamily:', workflowFamily);
+        console.log('[CHECKPOINT SELECTED]', selectedCheckpoint);
+        console.log('[SELECTED WORKFLOW PATH]', selectedWorkflow);
+
+        // ========== WORKFLOW FILE AS SOURCE OF TRUTH ==========
+        const isFileWorkflow = selectedWorkflow !== 'workflows/default_txt2img.json' && selectedWorkflow !== 'workflows/cartoon_txt2img.json';
+        console.log('[USING FILE WORKFLOW]', isFileWorkflow ? 'TRUE' : 'FALSE');
+        console.log('[WORKFLOW SOURCE] Using file-based workflow:', selectedWorkflow);
+
+        // Create a direct ComfyUI provider connection
+        const provider = new ComfyUIProvider({
+          baseUrl: 'http://127.0.0.1:8188',
+          clientId: `seri-ai-char-${Date.now()}`,
+          defaultImageWidth: 512,
+          defaultImageHeight: 512,
+          connectionTimeout: 10000,
+        });
+
+        // ========== FINAL PROMPT DEBUG ==========
+        console.log('');
+        console.log('========== CONSISTENCY PIPELINE DEBUG ==========');
+        console.log('[FINAL POSITIVE PROMPT]', finalPositivePrompt);
+        console.log('[FINAL NEGATIVE PROMPT]', finalNegativePrompt);
+        console.log('[FINAL STYLE IDS]', JSON.stringify(activeStyleIds));
+        console.log('[FINAL WORKFLOW PATH]', selectedWorkflow);
+        console.log('[FINAL CHECKPOINT]', selectedCheckpoint);
+        console.log('[FINAL SEED]', debugSeed);
+        console.log('============================================');
+        console.log('');
+
+        // Call provider.generateImage directly
+        const imageResult = await provider.generateImage(finalPositivePrompt, {
+          negativePrompt: finalNegativePrompt,
+          seed: debugSeed,
+          model: selectedCheckpoint,
+          workflowPath: selectedWorkflow,
+        });
+
+        // result.url = http://127.0.0.1:8188/view?filename=seri_ai_XXXXX.png&type=output
+        const imageUrl = imageResult.url || '';
+        console.log('[CHAR IMAGE] filename:', imageUrl.split('filename=')[1]?.split('&')[0] || 'unknown');
+        console.log('[CHAR IMAGE] url:', imageUrl);
+
+        // Extract appearance traits from character data for locking
+        const appearanceTraits = extractAppearanceTraits(entry, finalPositivePrompt);
+        console.log('[CONSISTENCY] Extracted appearance traits:', JSON.stringify(appearanceTraits));
+
+                // Update the entry with all generation metadata
+        const updatedEntry: CharacterBibleEntry = {
+          ...entry,
+          identityLocked: true,
+          reference_image_path: imageUrl,
+          reference_image_for_ipadapter: imageUrl, // Expose for future IPAdapter integration
+          seed: debugSeed,
+          workflow_path: selectedWorkflow,
+          checkpoint: selectedCheckpoint,
+          generation_positive_prompt: finalPositivePrompt,
+          generation_negative_prompt: finalNegativePrompt,
+          style_preset_ids: activeStyleIds,
+          appearance_traits: appearanceTraits,
+          updated_at: new Date().toISOString(),
+        };
+
+    onProgress?.(DONE_PROGRESS);
+
+    return {
+      entry: updatedEntry,
+      referenceImagePath: imageUrl,
+      success: true,
+    };
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : 'Unknown error generating character image';
+    console.error('[CHARACTER IMAGE GEN] Failed:', errMsg);
+    onProgress?.(makeError('character-image', errMsg));
+
+    return {
+      entry,
+      referenceImagePath: null,
+      success: false,
+      error: errMsg,
+    };
+  } finally {
+    globalProgressTracker.release(genKey);
+  }
+}
+

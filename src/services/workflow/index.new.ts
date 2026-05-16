@@ -22,12 +22,7 @@ import { AIServiceFactory } from '../../infrastructure/ai/AIServiceFactory';
 
 // Initialize AI provider registry and services
 const aiRegistry = new AIProviderRegistry();
-AIServiceFactory.initializeRegistry(aiRegistry, {
-  ollama: {
-    baseUrl: 'http://localhost:11434/api',
-    model: 'qwen2.5-coder:14b',
-  }
-});
+AIServiceFactory.initializeRegistry(aiRegistry);
 
 // Create story generator
 const storyGenerator = new StoryGenerator(aiRegistry);

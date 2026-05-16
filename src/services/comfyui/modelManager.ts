@@ -49,6 +49,9 @@ export class ModelManager extends BrowserEventEmitter {
    * Load available models from ComfyUI
    */
   public async loadModels(): Promise<ModelInfo[]> {
+    if (this.modelsLoaded) {
+      return this.getAllModels();
+    }
     try {
       // Try to get model list from ComfyUI
       const response = await fetch(`${this.baseUrl}/model_list`);
@@ -65,8 +68,8 @@ export class ModelManager extends BrowserEventEmitter {
       // Return the sorted list of models
       return this.getAllModels();
     } catch (error) {
-      console.error('Error loading models:', error);
-      throw error;
+      this.modelsLoaded = true; // cache empty result, stop retrying
+      return [];
     }
   }
   

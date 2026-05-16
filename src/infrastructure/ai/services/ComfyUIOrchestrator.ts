@@ -353,9 +353,9 @@ export class ComfyUIOrchestrator {
 
   /**
    * Process the workflow queue
+   * Guarantees isProcessing is always released: finally + item timeout
    */
   private async processQueue(): Promise<void> {
-    // Skip if already processing or no items in queue
     if (this.isProcessing || this.workflowQueue.length === 0) {
       return;
     }
@@ -373,28 +373,39 @@ export class ComfyUIOrchestrator {
     this.isProcessing = true;
     
     try {
-      // Get the next item from the queue
       const item = this.workflowQueue.shift();
-      
       if (!item) {
         this.isProcessing = false;
         return;
       }
-      
-      // Process the workflow
-      await this.processWorkflowItem(item);
-      
-      // Continue processing queue
-      this.isProcessing = false;
-      this.processQueue();
+
+      // Process with a safety timeout so a stuck waitForPrompt never holds the lock forever
+      const PROCESS_TIMEOUT_MS = 180_000; // 3 minutes max per item
+      let processTimedOut = false;
+      const processTimer = setTimeout(() => {
+        processTimedOut = true;
+        console.error('[QUEUE] processWorkflowItem timed out after', PROCESS_TIMEOUT_MS, 'ms for', item.id);
+        if (item.callbacks?.onError) {
+          item.callbacks.onError(new Error('Generation timed out after 3 minutes'));
+        }
+      }, PROCESS_TIMEOUT_MS);
+
+      try {
+        await this.processWorkflowItem(item);
+      } catch (error) {
+        console.error('[QUEUE] processWorkflowItem threw:', error);
+        if (!processTimedOut && item.callbacks?.onError) {
+          item.callbacks.onError(error instanceof Error ? error : new Error(String(error)));
+        }
+      } finally {
+        clearTimeout(processTimer);
+      }
     } catch (error) {
-      console.error('Error processing workflow queue:', error);
+      console.error('[QUEUE] Fatal error in processQueue:', error);
+    } finally {
+      // ALWAYS release lock and continue queue
       this.isProcessing = false;
-      
-      // Continue with next item after a delay
-      setTimeout(() => {
-        this.processQueue();
-      }, 5000);
+      setTimeout(() => this.processQueue(), 0);
     }
   }
 
@@ -576,7 +587,12 @@ export class ComfyUIOrchestrator {
    * Find a suitable workflow template for a generation type
    */
   private findSuitableTemplate(type: string): string {
-    // Find a template that matches the type
+    // Prefer sdxl-txt2img template if available (has real node IDs)
+    if (type === 'txt2img' && this.workflowTemplates.has('sdxl-txt2img')) {
+      return 'sdxl-txt2img';
+    }
+    
+    // Fallback to first matching template
     for (const [id, template] of this.workflowTemplates.entries()) {
       if (template.type === type) {
         return id;
@@ -680,5 +696,29 @@ export class ComfyUIOrchestrator {
     // Register the templates
     this.registerWorkflowTemplate(txt2imgTemplate);
     this.registerWorkflowTemplate(txt2vidTemplate);
+    
+    // Load SDXL template from local API if available (non-blocking)
+    this.tryLoadSDXLTemplate();
+  }
+  
+  private async tryLoadSDXLTemplate(): Promise<void> {
+    try {
+      const res = await fetch('/api/workflows/sdxl_txt2img.json');
+      if (res.ok) {
+        const wf = await res.json();
+        const promptNode = Object.keys(wf).find(k => wf[k]?.class_type === 'CLIPTextEncode') || '6';
+        const outputNode = Object.keys(wf).find(k => wf[k]?.class_type === 'SaveImage') || '9';
+        this.registerWorkflowTemplate({
+          id: 'sdxl-txt2img', name: 'SDXL Text to Image',
+          description: 'SDXL image generation workflow (loaded from local API)',
+          path: 'workflows/sdxl_txt2img.json', type: 'txt2img',
+          inputNodes: { promptNode, negativePromptNode: promptNode, sizeNode: '5', seedNode: '3' },
+          outputNodes: { imageNode: outputNode },
+          parameterMapping: { 'prompt': 'text', 'negative_prompt': 'negative_text', 'width': 'width', 'height': 'height', 'seed': 'seed' },
+          metadata: { model: 'SDXL', steps: 30 },
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+        });
+      }
+    } catch {}
   }
 }

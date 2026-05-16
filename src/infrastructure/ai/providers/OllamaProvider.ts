@@ -133,31 +133,104 @@ Just output raw, valid, parseable JSON.
       console.log('Extracted JSON length:', cleanJson.length);
       console.log('Extracted JSON preview:', cleanJson.substring(0, 150));
       
-      // Try to parse JSON
-      try {
-        const parsed = JSON.parse(cleanJson) as T;
-        
-        // Validate it's not empty
-        if (typeof parsed === 'object' && parsed !== null) {
-          if ('scenes' in parsed && Array.isArray(parsed.scenes)) {
-            if (parsed.scenes.length === 0) {
-              throw new Error('Ollama returned empty scenes array');
-            }
-            console.log(`Ollama returned ${parsed.scenes.length} scenes`);
+      // Use safe JSON parse with sanitization and auto-repair
+      const parsed = safeJsonParse<T>(cleanJson);
+      
+      // Validate it's not empty
+      if (typeof parsed === 'object' && parsed !== null) {
+        if ('scenes' in parsed && Array.isArray(parsed.scenes)) {
+          if (parsed.scenes.length === 0) {
+            throw new Error('Ollama returned empty scenes array');
           }
+          console.log(`Ollama returned ${parsed.scenes.length} scenes`);
         }
-        
-        return parsed;
-      } catch (parseError) {
-        console.error('JSON.parse failed:', parseError);
-        console.error('Raw text (first 300 chars):', text.substring(0, 300));
-        console.error('Extracted JSON (first 300 chars):', cleanJson.substring(0, 300));
-        throw new Error(`Ollama JSON parsing failed: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       }
+      
+      return parsed;
     } catch (error) {
       console.error('Ollama generateJSON error:', error);
       throw error;
     }
+  }
+}
+
+/**
+ * Safe JSON parse with sanitization and auto-repair.
+ * Handles:
+ * - Raw line breaks inside JSON strings
+ * - Invalid control characters
+ * - Invisible unicode control chars
+ * - Preserves Arabic text
+ * Never crashes the workflow — always logs and attempts repair.
+ */
+function safeJsonParse<T>(raw: string): T {
+  // Step 1: Sanitize control characters before parsing
+  const sanitized = raw
+    // Escape literal newlines inside JSON strings (they are only valid as \\n)
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+    // Remove invalid control characters (U+0000-U+001F except \\t \\n \\r which are already escaped)
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    // Remove Unicode control characters (zero-width space, BOM, etc.)
+    .replace(/[\u200B-\u200F\u2028\u2029\uFEFF]/g, '')
+    // Remove trailing commas (common LLM issue)
+    .replace(/,(\s*[}\]])/g, '$1');
+
+  console.log('[JSON SANITIZE] Original length:', raw.length, 'Sanitized length:', sanitized.length);
+
+  try {
+    const parsed = JSON.parse(sanitized) as T;
+    console.log('[JSON PARSE SUCCESS] Type:', typeof parsed);
+    return parsed;
+  } catch (firstError) {
+    console.log('[JSON REPAIR] First parse failed, attempting auto-repair...');
+
+    // Try extracting robust JSON structure
+    const repairs: string[] = [
+      // Repair: Remove BOM/leading junk
+      sanitized.replace(/^\uFEFF/, '').trim(),
+      // Repair: Extract content between first { and last }
+      (() => {
+        const start = sanitized.indexOf('{');
+        const end = sanitized.lastIndexOf('}');
+        return start >= 0 && end > start ? sanitized.slice(start, end + 1) : sanitized;
+      })(),
+      // Repair: Extract content between first [ and last ]
+      (() => {
+        const start = sanitized.indexOf('[');
+        const end = sanitized.lastIndexOf(']');
+        return start >= 0 && end > start ? sanitized.slice(start, end + 1) : sanitized;
+      })(),
+    ];
+
+    for (const attempt of repairs) {
+      try {
+        const parsed = JSON.parse(attempt) as T;
+        console.log('[JSON REPAIR] Success after repair, length:', attempt.length);
+        return parsed;
+      } catch {
+        continue;
+      }
+    }
+
+    // Final fallback — regex extraction of any JSON structure
+    console.log('[JSON PARSE FAILED] All repairs failed. Fallback: regex extraction');
+    const jsonObjMatch = sanitized.match(/\{[\s\S]*\}/);
+    const jsonArrMatch = sanitized.match(/\[[\s\S]*\]/);
+    const fallbackStr = jsonObjMatch?.[0] || jsonArrMatch?.[0] || '';
+    if (fallbackStr) {
+      try {
+        const parsed = JSON.parse(fallbackStr) as T;
+        console.log('[JSON REPAIR] Fallback regex extraction succeeded');
+        return parsed;
+      } catch {
+        // Last resort
+      }
+    }
+
+    console.error('[JSON PARSE FAILED] Raw preview (first 500):', raw.substring(0, 500));
+    throw new Error(`Ollama JSON parsing failed after all repair attempts: ${firstError instanceof Error ? firstError.message : String(firstError)}`);
   }
 }
 

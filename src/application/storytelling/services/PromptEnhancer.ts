@@ -37,64 +37,46 @@ export class PromptEnhancer {
       const detailLevel = options?.detailLevel || 'standard';
       const focus = options?.focus || 'balanced';
       
-      // Build a prompt to enhance the scene's visual prompt
+            // Build a compact prompt to enhance the scene's visual prompt (BUG 1 fix: compact JSON, avoid maxTokens)
+      console.log('[PROMPT ENHANCER] using compact mode');
       const promptTemplate = `
-Enhance this scene description into a detailed prompt for AI image generation:
+Enhance this scene into compact JSON for AI image generation.
 
-SCENE DESCRIPTION:
-Title: ${scene.title}
-${scene.description}
+Scene: ${scene.title}, Mood: ${scene.environment.mood}
+Camera: ${scene.cinematography.camera_angle}, Lighting: ${scene.cinematography.lighting}
+${scene.characters.length > 0 ? `Characters: ${scene.characters.map(char => `${char.emotion}${char.action ? `, ${char.action}` : ''}`).join('; ')}` : ''}
+${styleDescription ? `Style: ${styleDescription}` : ''}
+Current prompt: ${scene.prompt_text}
+Current negative: ${scene.negative_prompt}
 
-SCENE DETAILS:
-Location: ${scene.environment.location}
-Time: ${scene.environment.time}
-Mood: ${scene.environment.mood}
-Camera Angle: ${scene.cinematography.camera_angle}
-Camera Movement: ${scene.cinematography.camera_movement}
-Lighting: ${scene.cinematography.lighting}
-
-${scene.characters.length > 0 ? `CHARACTERS IN SCENE:
-${scene.characters.map(char => `- Character with emotion: ${char.emotion}${char.action ? `, action: ${char.action}` : ''}`).join('\n')}` : ''}
-
-${styleDescription ? `STYLE DESCRIPTION:
-${styleDescription}` : ''}
-
-CURRENT VISUAL PROMPT:
-${scene.prompt_text}
-
-CURRENT NEGATIVE PROMPT:
-${scene.negative_prompt}
-
-Your task:
-1. Create an enhanced prompt that describes the scene in vivid detail
-2. Include visual elements, composition, lighting, camera angle, and artistic style
-3. Create a comprehensive negative prompt to avoid common issues
-
-Detail level: ${detailLevel.toUpperCase()}
-Focus priority: ${focus.toUpperCase()}
-${options?.improveComposition ? 'Improve composition: YES' : ''}
-${options?.improveLighting ? 'Improve lighting description: YES' : ''}
-
-Format your response as a JSON object:
-{
-  "prompt": "Enhanced prompt text here...",
-  "negative_prompt": "Enhanced negative prompt here..."
-}
-      `;
-      
-      // Try each provider until one works
+Return ONLY compact JSON:
+{"positive":"<enhanced visual prompt, max 200 words>","negative":"<enhanced negative, max 50 words>"}
+`;      // Try each provider until one works
       for (const provider of providers) {
         try {
-          const result = await provider.generateJSON<{
-            prompt: string;
-            negative_prompt: string;
-          }>(promptTemplate);
+                    const result = await provider.generateJSON<{
+            prompt?: string;
+            positive?: string;
+            negative_prompt?: string;
+            negative?: string;
+          }>(promptTemplate, { maxTokens: 1500 });
+          
+          // Handle both {prompt, negative_prompt} and {positive, negative} schemas
+          const positive = result.prompt || result.positive || scene.prompt_text;
+          const negative = result.negative_prompt || result.negative || scene.negative_prompt;
+          
+          if (!positive || positive.length === 0) {
+            console.log('[PROMPT ENHANCER] fallback to original prompt');
+            return {
+              prompt: scene.prompt_text,
+              negative_prompt: scene.negative_prompt
+            };
+          }
           
           return {
-            prompt: result.prompt || scene.prompt_text,
-            negative_prompt: result.negative_prompt || scene.negative_prompt
-          };
-        } catch (error) {
+            prompt: positive,
+            negative_prompt: negative
+          };        } catch (error) {
           console.warn(`Prompt enhancement failed with provider ${provider.id}:`, error);
         }
       }

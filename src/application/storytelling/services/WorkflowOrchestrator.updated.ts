@@ -3,6 +3,8 @@ import { StoryGenerator } from "./StoryGenerator";
 import { NarrativeEnhancer } from "./NarrativeEnhancer";
 import { PromptEnhancer } from "./PromptEnhancer";
 import { CharacterContinuityService } from "./CharacterContinuity";
+import { getStyleKeywords } from "../../../services/character/CharacterPromptBuilder";
+import { buildStylePrefix, buildStyleNegative, getStyleFamilyLabel } from "../../../services/style/StyleFamilyRouter";
 import { Episode, Scene, StylePreset, Character, Prompt, SubtitleTrack, SubtitleEntry, RenderJob, RenderSettings, EpisodeWorkflowConfig } from "../../../types";
 import { Story, StoryMetadata } from "../../../domain/storytelling/entities/Story";
 
@@ -142,10 +144,55 @@ export class WorkflowOrchestrator {
         })
       );
       
-      // Return the enhanced story
+      // ========== STYLE FAMILY ROUTING ==========
+      console.log('[SELECTED STYLE IDS]', config.selected_style_preset_ids);
+      
+      // Get all selected style presets and combine their visual keywords
+      const selectedStylePresets = stylePresets.filter(s => config.selected_style_preset_ids?.includes(s.id));
+      const combinedStyleKeywords = selectedStylePresets
+        .map(s => getStyleKeywords(s.id || s.category))
+        .filter(Boolean)
+        .join('. ');
+      
+      // Use StyleFamilyRouter to build family-appropriate prefix and negative
+      const stylePrefix = buildStylePrefix(config.selected_style_preset_ids || []);
+      const styleNegativeAdditions = buildStyleNegative(config.selected_style_preset_ids || []);
+      const styleFamily = getStyleFamilyLabel(config.selected_style_preset_ids || []);
+      
+      console.log('[STYLE FAMILY]', styleFamily);
+      console.log('[FINAL STYLE PREFIX]', stylePrefix || '(none)');
+      console.log('[FINAL NEGATIVE]', styleNegativeAdditions || '(none)');
+      
+      // Inject combined style prefix into every scene's prompt and negative
+      const scenesWithStyleInjection = scenesWithCharacterConsistency.map(scene => {
+        let finalPrompt = scene.prompt_text;
+        let finalNegative = scene.negative_prompt;
+        
+        if (combinedStyleKeywords) {
+          finalPrompt = combinedStyleKeywords + ', ' + finalPrompt;
+        }
+        
+        if (stylePrefix) {
+          finalPrompt = stylePrefix + ', ' + finalPrompt;
+        }
+        
+        if (styleNegativeAdditions) {
+          finalNegative = finalNegative
+            ? finalNegative + ', ' + styleNegativeAdditions
+            : styleNegativeAdditions;
+        }
+        
+        return {
+          ...scene,
+          prompt_text: finalPrompt,
+          negative_prompt: finalNegative,
+        };
+      });
+      
+      // Return the enhanced story      // Return the enhanced story
       return {
         ...narrativeEnhancedStory,
-        scenes: scenesWithCharacterConsistency,
+        scenes: scenesWithStyleInjection,
         updated_at: new Date().toISOString(),
       };
     } catch (error) {
@@ -433,6 +480,7 @@ export class WorkflowOrchestrator {
         motion_instructions:
           config.camera_style === 'dynamic' ? 'Dynamic tracking shot' : 'Slow dolly',
         characters: config.character_ids,
+        character_outfits: {},
         style_preset_id: config.style_preset_id || null,
         voice_id: null,
         music_url: null,
@@ -448,14 +496,14 @@ export class WorkflowOrchestrator {
         video_references: [],
         created_at: now,
         updated_at: now,
-      };
-    });
-    
-    // Create episode
-    const episode: Episode = {
-      id: episodeId,
-      title: config.title,
-      description: config.story.slice(0, 200),
+    };
+  });
+  
+  // Create episode
+  const episode: Episode = {
+    id: episodeId,
+    title: config.title,
+    description: config.story.slice(0, 200),
       status: 'in_production',
       scenes,
       thumbnail_url: null,

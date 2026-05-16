@@ -34,6 +34,7 @@ const BatchGenerationPanel: React.FC<BatchGenerationPanelProps> = ({
     const loadData = async () => {
       try {
         const comfyService = ComfyUIService.getInstance();
+        await comfyService.initialize();
         const allTemplates = comfyService.getWorkflowTemplates();
         
         // Filter templates by type

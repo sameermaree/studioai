@@ -26,6 +26,16 @@ interface StudioState {
   updateEpisode: (id: string, updates: Partial<Episode>) => void;
   deleteEpisode: (id: string) => void;
 
+  // Character Bible (story characters per episode)
+  addStoryCharacter: (episodeId: string, entry: import('../types').CharacterBibleEntry) => void;
+  updateStoryCharacter: (episodeId: string, entryId: string, updates: Partial<import('../types').CharacterBibleEntry>) => void;
+  deleteStoryCharacter: (episodeId: string, entryId: string) => void;
+
+  // Location Bible (story locations per episode)
+  addStoryLocation: (episodeId: string, entry: import('../types').LocationBibleEntry) => void;
+  updateStoryLocation: (episodeId: string, entryId: string, updates: Partial<import('../types').LocationBibleEntry>) => void;
+  deleteStoryLocation: (episodeId: string, entryId: string) => void;
+
   addPrompt: (prompt: Prompt) => void;
   updatePrompt: (id: string, updates: Partial<Prompt>) => void;
   deletePrompt: (id: string) => void;
@@ -74,8 +84,8 @@ const saveProjectNow = async (getState: () => StudioState) => {
       savedAt: new Date().toISOString()
     };
     
-    // Save to file via backend
-    await fetch('http://localhost:3001/api/project', {
+    // Save to file via backend (relative path - Vite serves both frontend and API)
+    await fetch('/api/project', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -87,16 +97,30 @@ const saveProjectNow = async (getState: () => StudioState) => {
   }
 };
 
-// Load from backend on startup
+// Load from backend on startup - use relative path so vite proxy works
 let initialData: Partial<StudioState> = {};
 
 if (typeof window !== 'undefined') {
-  fetch('http://localhost:3001/api/project')
-    .then(res => res.json())
+  fetch('/api/project')
+    .then(res => {
+      if (!res.ok) throw new Error('API not ready');
+      return res.json();
+    })
     .then(data => {
       console.log(`✓ LOADED from file: Episodes=${data.episodes?.length || 0}, Characters=${data.characters?.length || 0}`);
       // Reload store with loaded data
-      useStudioStore.setState(data);
+      if (data.episodes?.length || data.characters?.length) {
+        // Merge loaded data with defaults — NEVER allow stylePresets to be empty
+        const mergedData = {
+          ...data,
+          stylePresets: (data.stylePresets && data.stylePresets.length > 0)
+            ? data.stylePresets
+            : systemStylePresets,
+        };
+        useStudioStore.setState(mergedData);
+        console.log('[STYLE PRESETS HYDRATED] count:', mergedData.stylePresets.length);
+        console.log('[STYLE PRESET IDS AVAILABLE]', mergedData.stylePresets.map((p: any) => p.id).join(', '));
+      }
     })
     .catch(() => console.log('Backend not available - starting fresh'));
 }
@@ -131,7 +155,7 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
       },
 
       addEpisode: (episode) => {
-        set((s) => ({ episodes: [...s.episodes, episode] }));
+        set((s) => ({ episodes: [...s.episodes, { ...episode, story_characters: episode.story_characters || [] }] }));
         saveProjectNow(get);
         console.log('[PROJECT SAVED] Episode added:', episode.title);
       },
@@ -141,6 +165,88 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
       },
       deleteEpisode: (id) => {
         set((s) => ({ episodes: s.episodes.filter((e) => e.id !== id) }));
+        saveProjectNow(get);
+      },
+
+      addStoryCharacter: (episodeId, entry) => {
+        set((s) => ({
+          episodes: s.episodes.map((e) =>
+            e.id === episodeId
+              ? { ...e, story_characters: [...(e.story_characters || []), entry], updated_at: new Date().toISOString() }
+              : e
+          ),
+        }));
+        saveProjectNow(get);
+      },
+      updateStoryCharacter: (episodeId, entryId, updates) => {
+        set((s) => ({
+          episodes: s.episodes.map((e) =>
+            e.id === episodeId
+              ? {
+                  ...e,
+                  story_characters: (e.story_characters || []).map((c) =>
+                    c.id === entryId ? { ...c, ...updates, updated_at: new Date().toISOString() } : c
+                  ),
+                  updated_at: new Date().toISOString(),
+                }
+              : e
+          ),
+        }));
+        saveProjectNow(get);
+      },
+      deleteStoryCharacter: (episodeId, entryId) => {
+        set((s) => ({
+          episodes: s.episodes.map((e) =>
+            e.id === episodeId
+              ? {
+                  ...e,
+                  story_characters: (e.story_characters || []).filter((c) => c.id !== entryId),
+                  updated_at: new Date().toISOString(),
+                }
+              : e
+          ),
+        }));
+        saveProjectNow(get);
+      },
+
+      addStoryLocation: (episodeId, entry) => {
+        set((s) => ({
+          episodes: s.episodes.map((e) =>
+            e.id === episodeId
+              ? { ...e, story_locations: [...(e.story_locations || []), entry], updated_at: new Date().toISOString() }
+              : e
+          ),
+        }));
+        saveProjectNow(get);
+      },
+      updateStoryLocation: (episodeId, entryId, updates) => {
+        set((s) => ({
+          episodes: s.episodes.map((e) =>
+            e.id === episodeId
+              ? {
+                  ...e,
+                  story_locations: (e.story_locations || []).map((loc) =>
+                    loc.id === entryId ? { ...loc, ...updates, updated_at: new Date().toISOString() } : loc
+                  ),
+                  updated_at: new Date().toISOString(),
+                }
+              : e
+          ),
+        }));
+        saveProjectNow(get);
+      },
+      deleteStoryLocation: (episodeId, entryId) => {
+        set((s) => ({
+          episodes: s.episodes.map((e) =>
+            e.id === episodeId
+              ? {
+                  ...e,
+                  story_locations: (e.story_locations || []).filter((loc) => loc.id !== entryId),
+                  updated_at: new Date().toISOString(),
+                }
+              : e
+          ),
+        }));
         saveProjectNow(get);
       },
 
@@ -201,3 +307,14 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
         saveProjectNow(get);
       },
     }));
+
+// Hydration fallback: ensure stylePresets are NEVER empty
+const currentState = useStudioStore.getState();
+if (!currentState.stylePresets || currentState.stylePresets.length === 0) {
+  useStudioStore.setState({ stylePresets: systemStylePresets });
+  console.log('[STYLE PRESETS HYDRATED] fallback - count:', systemStylePresets.length);
+  console.log('[STYLE PRESET IDS AVAILABLE]', systemStylePresets.map(p => p.id).join(', '));
+} else {
+  console.log('[STYLE PRESETS HYDRATED] count:', currentState.stylePresets.length);
+  console.log('[STYLE PRESET IDS AVAILABLE]', currentState.stylePresets.map(p => p.id).join(', '));
+}

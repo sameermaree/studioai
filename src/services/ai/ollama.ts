@@ -1,3 +1,15 @@
+/**
+ * Legacy Ollama workflow generator — FALLBACK ONLY.
+ *
+ * Primary narrative provider is now DeepSeek API.
+ * This module is kept as a local fallback when DeepSeek is unavailable.
+ * Do NOT use as primary — see src/infrastructure/ai/providers/DeepSeekProvider.ts
+ *
+ * @deprecated Use AIProviderRegistry + DeepSeek as primary instead.
+ *             This file is only for backward-compatible fallback in
+ *             src/services/workflow/index.ts and index.new.ts
+ */
+
 import type {
   EpisodeWorkflowConfig,
   Character,
@@ -64,104 +76,9 @@ export async function generateWorkflowWithOllama(
     .map((character) => ({
       name: character.name,
       description: character.description,
-      personality: character.personality_notes,
-      cinematic_notes: character.cinematic_notes,
-      consistency_lock: character.consistency_lock,
-      consistency_settings: character.consistency_settings,
     }));
 
-  const prompt = `
-You are an expert cinematic AI storyboard generator for children's animated videos.
-
-Your task:
-Convert the user's story into a structured production workflow for an AI animation studio.
-
-Output language:
-${config.target_language}
-
-Episode title:
-${config.title}
-
-Story:
-${config.story}
-
-Target audience:
-${config.target_audience_age}
-
-Visual style:
-${stylePreset?.name || 'cinematic animated style'}
-
-Style description:
-${stylePreset?.description || ''}
-
-Rendering style:
-${stylePreset?.rendering_style || ''}
-
-Lighting rules:
-${stylePreset?.lighting_rules || ''}
-
-Color palette:
-${stylePreset?.color_palette?.join(', ') || ''}
-
-Character guidance:
-${stylePreset?.character_guidance || ''}
-
-Camera style:
-${config.camera_style}
-
-Music mood:
-${config.music_mood}
-
-Voice style:
-${config.voice_style}
-
-Aspect ratio:
-${config.aspect_ratio}
-
-Consistency strength:
-${config.consistency_strength}
-
-Characters:
-${JSON.stringify(selectedCharacters, null, 2)}
-
-Generate exactly ${config.estimated_scenes} scenes.
-
-Each scene must include:
-- short title
-- narration text
-- detailed visual prompt for image/video generation
-- negative prompt
-- camera angle
-- motion instructions
-- duration in seconds
-
-Important rules:
-- Return ONLY valid JSON.
-- Do NOT use markdown.
-- Do NOT add explanations.
-- Do NOT copy copyrighted characters.
-- Create original characters only.
-- Keep character identity consistent across all scenes.
-- Make prompts cinematic, clear, and useful for future ComfyUI/WAN/Kling video generation.
-- CRITICAL: If target language is Arabic (ar), generate ALL scene content (title, narration, visual_prompt, camera_angle, motion_instructions) in Arabic language ONLY. لا تستخدم الإنجليزية أبداً في أي حقل عندما تكون اللغة عربية.
-- CRITICAL: If target language is English (en), generate ALL scene content in English language ONLY.
-
-Return exactly this JSON structure:
-
-{
-  "scenes": [
-    {
-      "title": "Scene title",
-      "narration": "Narration text",
-      "visual_prompt": "Detailed cinematic visual prompt",
-      "negative_prompt": "Negative prompt",
-      "camera_angle": "Camera angle",
-      "motion_instructions": "Motion instructions",
-      "duration": 8
-    }
-  ]
-}
-`;
+  const prompt = `Convert story to ${config.estimated_scenes} cinematic scenes. Language:${config.target_language}. Title:${config.title}. Story:${config.story}. Audience:${config.target_audience_age}. Style:${stylePreset?.name||'cinematic'}. Camera:${config.camera_style}. Ratio:${config.aspect_ratio}. Characters:${JSON.stringify(selectedCharacters)}. ${config.target_language==='ar'?'Use Arabic only. لا تستخدم الإنجليزية.':''} Return valid JSON: { "scenes": [{ "title": "", "narration": "", "visual_prompt": "", "negative_prompt": "", "camera_angle": "", "motion_instructions": "", "duration": 8 }] }`;
 
   const response = await fetch(OLLAMA_URL, {
     method: 'POST',

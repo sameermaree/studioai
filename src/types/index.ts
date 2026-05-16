@@ -84,6 +84,7 @@ export interface EpisodeWorkflowConfig {
   subtitle_languages: Language[];
   target_audience_age: string;
   style_preset_id: string;
+  selected_style_preset_ids: string[];
   duration_seconds: number;
   estimated_scenes: number;
   character_ids: string[];
@@ -95,12 +96,78 @@ export interface EpisodeWorkflowConfig {
   aspect_ratio: AspectRatio;
 }
 
+export interface CharacterBibleEntry {
+  id: string;
+  name: string;
+  role: string; // e.g. "protagonist", "love interest", "father"
+  character_type: string; // e.g. "child", "boy", "girl", "teenager", "man", "woman", "father", "mother", "uncle", "aunt", "teacher", "student", "villain", "hero", "friend"
+  age: number;
+  gender: 'male' | 'female' | 'non-binary' | 'unknown';
+  visual_description: string;
+  outfit: string;
+  hair: string;
+  eyes: string;
+  personality: string;
+  art_style: string;
+  character_prompt: string; // prompt for generating the character reference image
+  character_prompt_manual?: boolean; // true when user explicitly typed/edited the character_prompt textarea
+  scene_injection_prompt: string; // prompt snippet injected into scene prompts
+  negative_prompt: string;
+  reference_image_path: string | null;
+  seed: number | null;
+  /** Locked generation metadata — saved after first successful generation */
+  identityLocked?: boolean; // true after a successful character image generation — locks seed/workflow/prompts/traits
+  workflow_path: string | null; // workflow JSON path used for generation
+  checkpoint: string | null; // checkpoint .safetensors used
+  generation_positive_prompt: string | null; // exact positive prompt that produced the reference image
+  generation_negative_prompt: string | null; // exact negative prompt that produced the reference image
+  style_preset_ids: string[]; // style IDs active during generation
+  /** Locked appearance traits extracted from character data */
+  appearance_traits: CharacterAppearanceTraits;
+  /** Exposed for future IPAdapter integration */
+  reference_image_for_ipadapter: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CharacterAppearanceTraits {
+  hairstyle: string;
+  hair_color: string;
+  eye_color: string;
+  outfit: string;
+  age_range: string;
+  facial_structure: string;
+  body_proportions: string;
+  style_type: string;
+}
+
+export interface LocationBibleEntry {
+  id: string;
+  name: string;
+  type: string; // e.g. "classroom", "school", "playground", "home", "street", "market"
+  visual_description: string;
+  layout_description: string;
+  fixed_objects: string;
+  lighting: string;
+  color_palette: string;
+  mood: string;
+  location_prompt: string;
+  scene_injection_prompt: string;
+  negative_prompt: string;
+  reference_image_path: string | null;
+  seed: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Episode {
   id: string;
   title: string;
   description: string;
   status: EpisodeStatus;
   scenes: Scene[];
+  story_characters: CharacterBibleEntry[];
+  story_locations: LocationBibleEntry[];
   thumbnail_url: string | null;
   duration_estimate: number | null;
   style_preset_id: string | null;
@@ -122,6 +189,7 @@ export interface Scene {
   camera_angle: string;
   motion_instructions: string;
   characters: string[];
+  character_outfits: Record<string, string>; // characterId -> outfitId (which outfit each char wears in this scene)
   style_preset_id: string | null;
   voice_id: string | null;
   music_url: string | null;

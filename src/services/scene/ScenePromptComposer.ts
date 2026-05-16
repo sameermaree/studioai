@@ -1,8 +1,9 @@
 import type { Scene, Character, StylePreset } from '../../types';
-import { buildCharacterConsistencyPrompt, injectCharacterConsistency } from '../character/CharacterPromptBuilder';
+import { injectCharacterConsistency, cleanPromptForSDXL, getStyleKeywords, validateGenderConsistency } from '../character/CharacterPromptBuilder';
 
 /**
  * Scene Prompt Composer Engine
+ * Separates: story text, narration, image prompt, motion prompt, subtitle text
  */
 
 export interface ComposedScenePrompt {
@@ -18,6 +19,19 @@ export interface ComposedScenePrompt {
   seed?: number;
   aspectRatio: string;
   duration: number;
+  referenceImages: string[];
+  /** Debug info: the raw positive prompt before cleaning */
+  debugPositivePrompt?: string;
+  /** Debug info: the raw negative prompt before cleaning */
+  debugNegativePrompt?: string;
+  /** Debug info: identified character issues */
+  debugValidationWarnings?: string[];
+  /** Original story text (separate from image prompt) */
+  storyText?: string;
+  /** Narration text (separate from image prompt) */
+  narrationText?: string;
+  /** Subtitle text (separate from image prompt) */
+  subtitleText?: string;
 }
 
 export interface SceneComposerSettings {
@@ -27,7 +41,7 @@ export interface SceneComposerSettings {
   includeCinematic?: boolean;
 }
 
-// Camera presets
+// Camera presets (English only)
 const CAMERA_PRESETS: Record<string, string> = {
   'close-up': 'close-up shot, shallow depth of field, focused on subject',
   'medium shot': 'medium shot, waist up, balanced composition',
@@ -38,7 +52,7 @@ const CAMERA_PRESETS: Record<string, string> = {
   'over-the-shoulder': 'over-the-shoulder angle, conversational framing'
 };
 
-// Lighting presets
+// Lighting presets (English only)
 const LIGHTING_PRESETS: Record<string, string> = {
   'golden hour': 'golden hour lighting, warm sunset glow, soft shadows',
   'cinematic night': 'cinematic night lighting, moonlight, atmospheric',
@@ -48,7 +62,7 @@ const LIGHTING_PRESETS: Record<string, string> = {
   'volumetric light': 'volumetric god rays, atmospheric lighting, cinematic beams'
 };
 
-// Motion presets
+// Motion presets (English only)
 const MOTION_PRESETS: Record<string, string> = {
   'walking': 'character walking naturally, smooth gait, realistic movement',
   'running': 'character running, dynamic action, motion blur',
@@ -57,8 +71,20 @@ const MOTION_PRESETS: Record<string, string> = {
   'action movement': 'fast action sequence, dynamic choreography'
 };
 
+const DEFAULT_ENVIRONMENT = { location: '', time: '', mood: '' };
+
+// Quality enhancers
+const QUALITY_ENHANCERS: Record<string, string> = {
+  draft: 'simple scene',
+  standard: 'good quality, clear',
+  high: 'high quality, detailed, sharp focus, beautiful composition',
+  cinematic: 'cinematic quality, 8k, highly detailed, professional lighting, dramatic composition, masterpiece, award winning photography',
+};
+
 /**
- * Compose complete scene prompt
+ * Compose complete scene prompt.
+ * Story/narration/subtitle are kept separate from the image prompt.
+ * The image prompt sent to SDXL is clean English.
  */
 export function composeScenePrompt(
   scene: Scene,
@@ -67,91 +93,118 @@ export function composeScenePrompt(
 ): ComposedScenePrompt {
   console.log('[SCENE COMPOSER] Composing prompt for scene:', scene.title);
 
-  // Base prompts
+  // ========== SEPARATE TEXT STREAMS ==========
   const basePrompt = scene.prompt_text || scene.narration || '';
-  
-  // Camera prompt
-  const cameraPrompt = CAMERA_PRESETS[scene.camera_angle] || scene.camera_angle || 'medium shot';
-  
-  // Lighting prompt
-  const lightingPrompt = scene.cinematography?.lighting 
-    ? (LIGHTING_PRESETS[scene.cinematography.lighting] || scene.cinematography.lighting)
-    : 'natural lighting, soft shadows';
-  
-  // Motion prompt
+  const storyText = scene.prompt_text || '';
+  const narrationText = scene.narration || '';
+  const subtitleText = scene.subtitle_text || '';
+
+  // ========== CAMERA ==========
+  const cameraPrompt = CAMERA_PRESETS[scene.camera_angle] 
+    || (typeof scene.camera_angle === 'string' ? scene.camera_angle : '')
+    || 'medium shot, waist up, balanced composition';
+
+  // ========== LIGHTING ==========
+  const env = (scene as any).environment || DEFAULT_ENVIRONMENT;
+  const cinematography = (scene as any).cinematography || {};
+  const lightingPrompt = cinematography.lighting
+    ? (LIGHTING_PRESETS[cinematography.lighting] || String(cinematography.lighting))
+    : 'natural lighting, soft shadows, well lit';
+
+  // ========== MOTION ==========
   const motionPrompt = scene.motion_instructions
-    ? (MOTION_PRESETS[scene.motion_instructions] || scene.motion_instructions)
-    : 'slow cinematic movement';
-  
-  // Environment prompt
-  const environmentPrompt = scene.environment
-    ? `${scene.environment.location}, ${scene.environment.time}, ${scene.environment.mood} mood`
+    ? (MOTION_PRESETS[scene.motion_instructions] 
+      || (typeof scene.motion_instructions === 'string' ? scene.motion_instructions : '')
+      || 'slow cinematic movement')
+    : 'slow cinematic movement, gentle camera pan';
+
+  // ========== ENVIRONMENT ==========
+  const environmentPrompt = env.location
+    ? `setting: ${env.location}, time: ${env.time || 'day'}, mood: ${env.mood || 'neutral'}`
     : '';
-  
-  // Style prompt
-  const stylePrompt = settings?.stylePreset
-    ? `${settings.stylePreset.rendering_style}, ${settings.stylePreset.cinematic_mood} atmosphere`
-    : 'cinematic quality, professional production';
-  
-  // Quality enhancement
-  const qualityPrompt = settings?.quality === 'cinematic'
-    ? 'cinematic masterpiece, 8k, highly detailed, professional lighting'
-    : settings?.quality === 'high'
-    ? 'high quality, detailed, sharp focus'
-    : 'good quality, clear';
-  
-  // Character consistency injection
+
+  // ========== STYLE ==========
+  const stylePreset = settings?.stylePreset;
+  const styleKeywords = stylePreset
+    ? getStyleKeywords(stylePreset.id || stylePreset.category)
+    : (scene.style_preset_id ? getStyleKeywords(scene.style_preset_id) : '');
+  const stylePrompt = styleKeywords || 'cinematic quality, professional production';
+
+  // ========== QUALITY ==========
+  const qualityPrompt = QUALITY_ENHANCERS[settings?.quality || 'standard'] || 'good quality, clear';
+
+  // ========== CHARACTER INJECTION ==========
   let characterPrompt = '';
   let characterNegative = '';
-  let characterSeeds: number[] = [];
-  
+  let referenceImages: string[] = [];
+  const debugWarnings: string[] = [];
+
   if (settings?.includeCharacters !== false && characters.length > 0) {
     const sceneCharacters = characters.filter(char => 
       scene.characters?.includes(char.id)
     );
     
+    // Validate gender consistency
+    for (const ch of sceneCharacters) {
+      const check = validateGenderConsistency(ch);
+      if (!check.valid && check.warning) {
+        debugWarnings.push(check.warning);
+        console.warn('[CHARACTER WARNING]', check.warning);
+      }
+    }
+
     if (sceneCharacters.length > 0) {
-      const { prompt, negative, seeds } = injectCharacterConsistency(basePrompt, sceneCharacters);
+      const { prompt, negative, referenceImages: refs } = injectCharacterConsistency(
+        basePrompt, 
+        sceneCharacters,
+        scene.character_outfits
+      );
       characterPrompt = prompt;
       characterNegative = negative;
-      characterSeeds = seeds;
+      referenceImages = refs;
+      console.log('[CHARACTER PROMPT]', characterPrompt);
+      console.log('[CHARACTER NEGATIVE]', characterNegative);
     }
   }
-  
-  // Image prompt (for still frames)
-  const imagePrompt = [
-    characterPrompt || basePrompt,
+
+  // ========== IMAGE PROMPT (for SDXL) ==========
+  // Combine: visual description + characters + environment + camera + lighting + style + quality
+  // Only English, no story/narration/subtitle text
+  const imageParts = [
+    characterPrompt || cleanPromptForSDXL(basePrompt),
     environmentPrompt,
     cameraPrompt,
     lightingPrompt,
     stylePrompt,
-    qualityPrompt
-  ].filter(Boolean).join(', ');
-  
-  // Video prompt (for motion)
-  const videoPrompt = [
-    characterPrompt || basePrompt,
+    qualityPrompt,
+  ].filter(Boolean);
+  const imagePrompt = imageParts.join(', ');
+
+  // ========== VIDEO PROMPT (for motion generation) ==========
+  const videoParts = [
+    characterPrompt || cleanPromptForSDXL(basePrompt),
     environmentPrompt,
     cameraPrompt,
     lightingPrompt,
     motionPrompt,
     stylePrompt,
-    qualityPrompt
-  ].filter(Boolean).join(', ');
-  
-  // Negative prompt
-  const negativePrompt = [
-    scene.negative_prompt || '',
+    qualityPrompt,
+  ].filter(Boolean);
+  const videoPrompt = videoParts.join(', ');
+
+  // ========== NEGATIVE PROMPT ==========
+  const negativeParts = [
     characterNegative,
     'blurry, low quality, deformed, ugly, bad anatomy',
-    settings?.stylePreset?.negative_prompts || ''
-  ].filter(Boolean).join(', ');
-  
-  // Final prompt (comprehensive)
+    stylePreset?.negative_prompts || '',
+  ].filter(Boolean);
+  const negativePrompt = negativeParts.join(', ');
+
+  // ========== FINAL PROMPT ==========
   const finalPrompt = videoPrompt;
-  
-  // Seed (use first character seed or scene seed)
-  const seed = characterSeeds[0] || scene.seed || undefined;
+
+  // Seed
+  const seed = scene.seed || undefined;
   
   // Aspect ratio
   const aspectRatio = scene.style_preset_id 
@@ -161,7 +214,10 @@ export function composeScenePrompt(
   console.log('[PROMPT COMPOSED]', {
     scene: scene.title,
     characters: characters.length,
-    length: finalPrompt.length
+    imagePromptLength: imagePrompt.length,
+    finalPrompt,
+    negativePrompt,
+    warnings: debugWarnings,
   });
   
   return {
@@ -176,7 +232,12 @@ export function composeScenePrompt(
     finalPrompt,
     seed,
     aspectRatio,
-    duration: scene.duration
+    duration: scene.duration,
+    referenceImages,
+    debugValidationWarnings: debugWarnings,
+    storyText,
+    narrationText,
+    subtitleText,
   };
 }
 

@@ -1,6 +1,10 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { loadProject, saveProject } from './storage.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 // CORS middleware - allow all localhost origins
@@ -27,6 +31,21 @@ app.get('/api/project', (req, res) => {
 app.post('/api/project', (req, res) => {
   const success = saveProject(req.body);
   res.json({ success });
+});
+
+// Serve workflow JSON files
+app.get('/api/workflows/:file', (req, res) => {
+  const filePath = path.resolve(__dirname, '../workflows', req.params.file);
+  try {
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      res.json(data);
+    } else {
+      res.status(404).json({ error: 'Workflow not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load workflow' });
+  }
 });
 
 const PORT = 3001;

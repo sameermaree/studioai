@@ -98,7 +98,7 @@ const ComfyUIStatus: React.FC = () => {
         // Try to get model information
         try {
           const modelManager = comfyService.getModelManager();
-          const models = await modelManager.loadModels();
+          const models: any[] = []; // model list disabled until endpoint available
           
           // Group models by type
           const types = Array.from(new Set(models.map(m => m.type)));
