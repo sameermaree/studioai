@@ -7,10 +7,22 @@
       "sampler_name": "dpmpp_sde",
       "scheduler": "karras",
       "denoise": 1,
-      "model": ["10", 0],
-      "positive": ["6", 0],
-      "negative": ["7", 0],
-      "latent_image": ["5", 0]
+      "model": [
+        "10",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
     },
     "class_type": "KSampler"
   },
@@ -31,83 +43,114 @@
   "6": {
     "inputs": {
       "text": "",
-      "clip": ["4", 1]
+      "clip": [
+        "4",
+        1
+      ]
     },
     "class_type": "CLIPTextEncode"
   },
   "7": {
     "inputs": {
       "text": "",
-      "clip": ["4", 1]
+      "clip": [
+        "4",
+        1
+      ]
     },
     "class_type": "CLIPTextEncode"
   },
   "8": {
     "inputs": {
-      "samples": ["3", 0],
-      "vae": ["4", 2]
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
     },
     "class_type": "VAEDecode"
   },
   "9": {
     "inputs": {
       "filename_prefix": "seri_ai_pixar_ipadapter",
-      "images": ["14", 0]
+      "images": [
+        "14",
+        0
+      ]
     },
     "class_type": "SaveImage"
   },
   "10": {
     "inputs": {
-      "model": ["15", 0],
-      "ipadapter": ["11", 0],
-      "image": ["13", 0],
+      "model": [
+        "15",
+        0
+      ],
+      "ipadapter": [
+        "11",
+        0
+      ],
+      "image": [
+        "13",
+        0
+      ],
       "weight_type": "linear",
       "weight": 0.7,
-      "noise": 0.1,
       "start_at": 0.0,
       "end_at": 1.0,
-      "embeds": [],
-      "insightface_cache": true
+      "combine_embeds": "concat",
+      "embeds_scaling": "V only",
+      "clip_vision": [
+        "12",
+        0
+      ]
     },
     "class_type": "IPAdapterAdvanced"
   },
   "11": {
     "inputs": {
-      "ipadapter_file": "ip-adapter_plus_sdxl_vit-h.safetensors",
+      "ipadapter_file": "ip-adapter_sdxl.bin",
       "insightface_cache": true
     },
     "class_type": "IPAdapterModelLoader"
   },
   "12": {
     "inputs": {
-      "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+      "clip_name": "CLIP-ViT-bigG-14-laion2B-39B-b160k.safetensors"
     },
     "class_type": "CLIPVisionLoader"
   },
   "13": {
     "inputs": {
-      "image": ""
+      "image": "test_ref.png"
     },
     "class_type": "LoadImage"
   },
   "14": {
     "inputs": {
-      "images": ["8", 0],
-      "rescale_factor": 2.0,
-      "resampling_method": "lanczos",
-      "supersample": "true",
-      "rounding_modulus": 1,
-      "seamless_mode": "None",
-      "sharpening": 0.3,
-      "antialias": "true"
+      "image": [
+        "8",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "scale_by": 2.0
     },
-    "class_type": "ImageUpscaleBy"
+    "class_type": "ImageScaleBy"
   },
   "15": {
     "inputs": {
-      "model": ["4", 0],
-      "clip": ["4", 1],
-      "lora_name": "pixar_sdxl.safetensors",
+      "model": [
+        "4",
+        0
+      ],
+      "clip": [
+        "4",
+        1
+      ],
+      "lora_name": "pixar-sdxl-lora.safetensors",
       "strength_model": 0.8,
       "strength_clip": 0.8
     },
