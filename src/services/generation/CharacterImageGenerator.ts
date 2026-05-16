@@ -15,7 +15,7 @@ import type { CharacterBibleEntry } from '../../types';
 import { buildCharacterPortraitPrompt, buildCharacterPortraitNegative } from '../character/CharacterPromptBuilder';
 import { getStyleKeywords } from "../character/CharacterPromptBuilder";
 import { buildStylePrefix, buildStyleNegative, getStyleFamilyLabel, classifyStyleIds } from "../style/StyleFamilyRouter";
-import { selectCheckpoint, selectWorkflow, getPrimaryStyleFamily } from "../style/StyleWorkflowRouter";
+import {selectCheckpoint, selectWorkflow, getPrimaryStyleFamily, selectIdentityWorkflow, selectIdentityCheckpoint} from "../style/StyleWorkflowRouter";
 import type { ProgressState } from './GenerationProgressTracker';
 import { makeProgress, makeError, DONE_PROGRESS, globalProgressTracker, makeGenerationKey } from './GenerationProgressTracker';
 import { ComfyUIProvider } from '../../infrastructure/ai/providers/ComfyUIProvider';
@@ -226,168 +226,52 @@ export async function generateCharacterImage(
         const isIdentityLocked = entry.identityLocked && entry.seed !== null && entry.workflow_path !== null && entry.checkpoint !== null;
         console.log('[CONSISTENCY] identityLocked:', isIdentityLocked, '| Character:', entry.name);
 
-        // ========== STYLE WORKFLOW ROUTING ==========
-        // ========== CHARACTER IMAGE PIPELINE: FORCE DREAMSHAPER DISNEY/PIXAR ==========
-        // Character reference images MUST use the Disney/Pixar DreamShaper pipeline.
-        // No JuggernautXL, no SDXL fallback, no generic pipeline.
-        // stylePresetIds MUST contain a Pixar/Disney style, or the call will be rejected.
-        const hasPixarDisneyStyle = stylePresetIds && (stylePresetIds.includes('style-pixar') || stylePresetIds.includes('style-disney') || stylePresetIds.includes('style-kids-edu'));
-        if (!isIdentityLocked && !hasPixarDisneyStyle) {
-          const errMsg = 'Character image generation requires a Disney/Pixar style preset. ' +
-            'Received stylePresetIds: ' + JSON.stringify(stylePresetIds) + '. ' +
-            'Please select Pixar, Disney, or Kids Educational style before generating character images.';
-          console.error('[WORKFLOW ERROR]', errMsg);
-          throw new Error(errMsg);
-        }
+                // ========== IDENTITY WORKFLOW ROUTING ==========
+        // Two modes:
+        //   A) Normal character generation (no reference image):
+        //      -> workflows/pixar_disney_stable.json (DreamShaperXL only)
+        //   B) Locked/reference identity generation (has reference_image_path or identityLocked):
+        //      -> workflows/pixar_disney_ipadapter_v1.json (DreamShaperXL + LoRA + IPAdapter)
 
-        const selectedCheckpoint = isIdentityLocked
-          ? entry.checkpoint!
-          : selectCheckpoint(stylePresetIds || []);
-        const selectedWorkflow = isIdentityLocked
-          ? entry.workflow_path!
-          : selectWorkflow(stylePresetIds || []);
-        const workflowFamily = (stylePresetIds && stylePresetIds.length > 0)
-          ? getPrimaryStyleFamily(stylePresetIds)
-          : 'pixar-disney';
-                const activeStyleIds = isIdentityLocked ? entry.style_preset_ids : (stylePresetIds || []);
+        // Determine if we have a reference image to use for IPAdapter
+        const hasReferenceImage = !!(entry.reference_image_path && entry.reference_image_path.trim().length > 0);
+        const shouldUseIPAdapter = hasReferenceImage || !!isIdentityLocked;
+
+        console.log('[IDENTITY ROUTER] Character:', entry.name);
+        console.log('[IDENTITY ROUTER] identityLocked:', isIdentityLocked);
+        console.log('[IDENTITY ROUTER] hasReferenceImage:', hasReferenceImage);
+        console.log('[IDENTITY ROUTER] shouldUseIPAdapter:', shouldUseIPAdapter);
+
+        // Select workflow based on reference image availability
+        const selectedWorkflow = selectIdentityWorkflow(shouldUseIPAdapter);
+        const selectedCheckpoint = selectIdentityCheckpoint();
+        const workflowFamily = 'pixar-disney';
+        const activeStyleIds = isIdentityLocked ? entry.style_preset_ids : (stylePresetIds || []);
         const debugSeed = isIdentityLocked ? entry.seed! : (entry.seed ?? Math.floor(Math.random() * 2147483647));
 
         console.log('[CONSISTENCY] seed:', debugSeed);
         console.log('[CONSISTENCY] workflow:', selectedWorkflow);
         console.log('[CONSISTENCY] checkpoint:', selectedCheckpoint);
         console.log('[CONSISTENCY] stylePresetIds:', activeStyleIds);
-        
-        // Verify the selected workflow is the Pixar/Disney one
-        if (!selectedWorkflow.includes('pixar_disney_stable')) {
-          console.warn('[WORKFLOW WARNING] Expected pixar_disney_stable.json but got:', selectedWorkflow);
-        }
-        if (!selectedCheckpoint.includes('dreamshaperXL')) {
-          console.warn('[WORKFLOW WARNING] Expected dreamshaperXL checkpoint but got:', selectedCheckpoint);
-        }
 
-        // ========== BUILD PROMPTS ==========
-        // Use locked prompts if available, otherwise build fresh
-        let finalPositivePrompt: string;
-        let finalNegativePrompt: string;
-
-        // ===== STRICT MANUAL PROMPT BYPASS =====
-        // If the user has typed a manual prompt (character_prompt_manual === true),
-        // send it EXACTLY as-is to ComfyUI. NO modifications, NO sanitization, NO injection.
-        // This is the #1 requirement: user's textarea text must reach ComfyUI unchanged.
-        if (entry.character_prompt_manual && entry.character_prompt && entry.character_prompt.trim().length > 0) {
-          console.log('');
-          console.log('========== MANUAL PROMPT MODE ACTIVE ==========');
-          console.log('[MANUAL PROMPT RAW]', entry.character_prompt);
-          finalPositivePrompt = entry.character_prompt;
-          finalNegativePrompt = entry.negative_prompt || '';
-          console.log('[FINAL PROMPT SENT TO COMFYUI]', finalPositivePrompt);
-          console.log('[MANUAL NEGATIVE RAW]', finalNegativePrompt);
-          console.log('[BYPASS] All auto-transformations DISABLED for manual prompt');
-          console.log('============================================');
-          console.log('');
-
-          // STRICT ENFORCEMENT: Throw if prompt was modified after assignment
-          if (finalPositivePrompt !== entry.character_prompt) {
-            throw new Error("Manual prompt was modified before ComfyUI. This is forbidden. Expected: '" + entry.character_prompt + "' Got: '" + finalPositivePrompt + "'");
-          }
-        } else if (isIdentityLocked && entry.generation_positive_prompt) {
-          // Reuse the exact same prompts that produced the reference image
-          finalPositivePrompt = entry.generation_positive_prompt;
-          finalNegativePrompt = entry.generation_negative_prompt || '';
-          console.log('[CONSISTENCY] Reusing locked prompts from previous generation');
-          console.log('[LOCKED PROMPT]', finalPositivePrompt);
-        } else {
-          // Build fresh prompts using the character's data
-          const styleFamily = (stylePresetIds && stylePresetIds.length > 0)
-            ? classifyStyleIds(stylePresetIds).find(f => f !== 'cinematic' && f !== 'unknown') || 'unknown'
-            : 'unknown';
-          console.log('[BASE CHARACTER PROMPT] styleFamily:', styleFamily);
-
-          // Build base prompts
-          let positivePrompt: string;
-          let negativePrompt: string;
-
-          if (entry.character_prompt && entry.character_prompt.trim().length > 10) {
-            console.log('[PROMPT SOURCE] Using user-written character_prompt directly');
-            positivePrompt = entry.character_prompt;
-            negativePrompt = entry.negative_prompt || buildCharacterPortraitNegative(entry, styleFamily);
-          } else if (styleFamily === 'cartoon') {
-            console.log('[PROMPT SOURCE] No user prompt found, using cartoon fallback');
-            positivePrompt = (
-              '(Pixar-style 3D animated character:1.5), ' +
-              '(Disney cinematic animated film:1.4), ' +
-              '(stylized 3D render:1.4), ' +
-              '(high-end animated movie frame:1.3), ' +
-              '(subsurface scattering:1.2), ' +
-              '(global illumination:1.2), ' +
-              '(soft cinematic volumetric lighting:1.2), ' +
-              'large expressive eyes, ' +
-              'rounded facial features, ' +
-              'stylized anatomy, ' +
-              'toy-like materials, ' +
-              'smooth 3D shading, ' +
-              'cute proportions, ' +
-              'slightly oversized head, ' +
-              'colorful animated film aesthetic'
-            );
-            negativePrompt = (
-              '(photorealistic:1.5), ' +
-              '(real human skin:1.5), ' +
-              '(fashion photography:1.4), ' +
-              '(stock photo:1.4), ' +
-              '(realistic anatomy:1.3), ' +
-              '(live action:1.3), ' +
-              'studio portrait, ' +
-              'skin pores, ' +
-              'realistic skin texture, ' +
-              'documentary, ' +
-              'adult proportions, ' +
-              'anime, manga, 2D, illustration, comic, sketch, line art, ' +
-              'flat shading, cel shading, black outline, monochrome, drawing'
-            );
-          } else {
-            console.log('[PROMPT SOURCE] No user prompt, building from builder');
-            positivePrompt = entry.character_prompt || buildCharacterPortraitPrompt(entry, styleFamily);
-            negativePrompt = buildCharacterPortraitNegative(entry, styleFamily);
-          }
-          console.log('[BUILT/PASSED] positivePrompt:', positivePrompt);
-          console.log('[BUILT/PASSED] negativePrompt:', negativePrompt);
-
-          // Merge style keywords if style presets are active
-          finalPositivePrompt = positivePrompt;
-          finalNegativePrompt = negativePrompt;
-
-          if (stylePresetIds && stylePresetIds.length > 0) {
-            const combinedStyle = stylePresetIds
-              .map(id => getStyleKeywords(id))
-              .filter(Boolean)
-              .join('. ');
-            const stylePrefix = buildStylePrefix(stylePresetIds);
-            const styleNegativeAdditions = buildStyleNegative(stylePresetIds);
-            const prefixParts = [combinedStyle, stylePrefix].filter(Boolean);
-            const fullPrefix = prefixParts.join(', ');
-            if (fullPrefix) {
-              finalPositivePrompt = fullPrefix + ', ' + positivePrompt;
-              console.log('[STYLE INJECTION] Prepended style prefix');
-            }
-            if (styleNegativeAdditions) {
-              finalNegativePrompt = (negativePrompt ? negativePrompt + ', ' : '') + styleNegativeAdditions;
-            }
-          }
-
-          console.log('[BEFORE SANITIZE] finalPositivePrompt:', finalPositivePrompt);
-
-          // Apply prompt sanitization
-          finalPositivePrompt = sanitizeFinalPromptForComfyUI(finalPositivePrompt);
-          finalNegativePrompt = sanitizeFinalPromptForComfyUI(finalNegativePrompt);
-          console.log('[AFTER SANITIZE] finalPositivePrompt:', finalPositivePrompt);
+        // HARD VALIDATION: If IPAdapter workflow is selected, reference image path MUST exist
+        if (selectedWorkflow.includes('ipadapter') && !hasReferenceImage) {
+          const errMsg = 'IPAdapter identity workflow requires a reference image path. ' +
+            'Character "' + entry.name + '" has no reference image. ' +
+            'Generate a normal image first, then use identity mode.';
+          console.error('[IDENTITY ERROR]', errMsg);
+          throw new Error(errMsg);
         }
 
-        console.log('[STYLE WORKFLOW ROUTER] workflowFamily:', workflowFamily);
-        console.log('[CHECKPOINT SELECTED]', selectedCheckpoint);
-        console.log('[SELECTED WORKFLOW PATH]', selectedWorkflow);
+        // HARD VALIDATION: If no reference image, we MUST NOT use IPAdapter workflow
+        if (!hasReferenceImage && selectedWorkflow.includes('ipadapter')) {
+          const errMsg = 'Internal error: IPAdapter workflow selected without reference image. ' +
+            'Falling back to stable workflow is not allowed. Aborting.';
+          console.error('[IDENTITY ERROR]', errMsg);
+          throw new Error(errMsg);
+        }
 
-        // ========== WORKFLOW DIMENSION DIAGNOSTIC ==========
+// ========== WORKFLOW DIMENSION DIAGNOSTIC ==========
         // DETECT SDXL models that need 1024x1024 instead of 512x512
         const IS_SDXL_MODEL = selectedCheckpoint.toLowerCase().includes('xl');
         const RECOMMENDED_WIDTH = IS_SDXL_MODEL ? 1024 : 512;
@@ -447,6 +331,20 @@ export async function generateCharacterImage(
         console.log('');
 
         // Call provider.generateImage directly
+                        // Build workflow inputs for IPAdapter reference image injection
+        const workflowInputs: Record<string, any> = {};
+        if (shouldUseIPAdapter && hasReferenceImage && entry.reference_image_path) {
+          // Inject the character's reference image into the Load Image node (node 13)
+          workflowInputs['13'] = {
+            class_type: 'LoadImage',
+            inputs: {
+              image: entry.reference_image_path,
+            }
+          };
+          console.log('[IPADAPTER INJECTION] Reference image path:', entry.reference_image_path);
+          console.log('[IPADAPTER INJECTION] Injected into node 13 (LoadImage)');
+        }
+
         const imageResult = await provider.generateImage(finalPositivePrompt, {
           negativePrompt: finalNegativePrompt,
           seed: debugSeed,
@@ -454,6 +352,7 @@ export async function generateCharacterImage(
           workflowPath: selectedWorkflow,
           width: genWidth,
           height: genHeight,
+          workflowInputs: Object.keys(workflowInputs).length > 0 ? workflowInputs : undefined,
         });
         // result.url = http://127.0.0.1:8188/view?filename=seri_ai_XXXXX.png&type=output
         const imageUrl = imageResult.url || '';

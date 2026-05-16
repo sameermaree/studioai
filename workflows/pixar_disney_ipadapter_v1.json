@@ -1,0 +1,116 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 42,
+      "steps": 8,
+      "cfg": 4.5,
+      "sampler_name": "dpmpp_sde",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": ["10", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "class_type": "KSampler"
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "dreamshaperXL_alpha2Xl10.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple"
+  },
+  "5": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage"
+  },
+  "6": {
+    "inputs": {
+      "text": "",
+      "clip": ["4", 1]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "7": {
+    "inputs": {
+      "text": "",
+      "clip": ["4", 1]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "8": {
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["4", 2]
+    },
+    "class_type": "VAEDecode"
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "seri_ai_pixar_ipadapter",
+      "images": ["14", 0]
+    },
+    "class_type": "SaveImage"
+  },
+  "10": {
+    "inputs": {
+      "model": ["15", 0],
+      "ipadapter": ["11", 0],
+      "image": ["13", 0],
+      "weight_type": "linear",
+      "weight": 0.7,
+      "noise": 0.1,
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "embeds": [],
+      "insightface_cache": true
+    },
+    "class_type": "IPAdapterAdvanced"
+  },
+  "11": {
+    "inputs": {
+      "ipadapter_file": "ip-adapter_plus_sdxl_vit-h.safetensors",
+      "insightface_cache": true
+    },
+    "class_type": "IPAdapterModelLoader"
+  },
+  "12": {
+    "inputs": {
+      "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+    },
+    "class_type": "CLIPVisionLoader"
+  },
+  "13": {
+    "inputs": {
+      "image": ""
+    },
+    "class_type": "LoadImage"
+  },
+  "14": {
+    "inputs": {
+      "images": ["8", 0],
+      "rescale_factor": 2.0,
+      "resampling_method": "lanczos",
+      "supersample": "true",
+      "rounding_modulus": 1,
+      "seamless_mode": "None",
+      "sharpening": 0.3,
+      "antialias": "true"
+    },
+    "class_type": "ImageUpscaleBy"
+  },
+  "15": {
+    "inputs": {
+      "model": ["4", 0],
+      "clip": ["4", 1],
+      "lora_name": "pixar_sdxl.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8
+    },
+    "class_type": "LoraLoader"
+  }
+}
