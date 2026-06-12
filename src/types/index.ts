@@ -14,6 +14,13 @@ export interface Character {
   personality_notes: string;
   cinematic_notes: string;
   metadata: Record<string, unknown>;
+  // LoRA — Phase B
+  lora?: {
+    status: 'none' | 'active';
+    filename: string | null;
+    trigger_word: string | null;
+    weight: number;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -172,6 +179,10 @@ export interface Episode {
   duration_estimate: number | null;
   style_preset_id: string | null;
   workflow_config: EpisodeWorkflowConfig | null;
+  story_characters: CharacterBibleEntry[];
+  export_url?: string | null;
+  exported_at?: string | null;
+  export_ready_marked?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -203,6 +214,12 @@ export interface Scene {
   render_url: string | null;
   image_references: string[];
   video_references: string[];
+  // Audio fields (Phase 5)
+  audio_url?: string | null;
+  audio_status?: 'none' | 'generating' | 'done' | 'failed';
+  audio_duration?: number | null;
+  voice_id?: string | null;
+  voice_provider?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,26 +1,35 @@
+/**
+ * Sidebar.tsx — Simplified navigation.
+ * Main: Dashboard, Episodes, Characters.
+ * Advanced: collapsed section for power tools.
+ */
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Film, Sparkles, Mic2, MonitorPlay, Share2, Settings, ChevronLeft, ChevronRight, Clapperboard, FolderOpen, Palette, Files as SubtitlesIcon, Image as ImageIcon } from 'lucide-react';
+import {
+  LayoutDashboard, Users, Film, Settings,
+  Clapperboard, ChevronLeft, ChevronRight,
+  ChevronDown, Wrench, ImageIcon, Mic2, FolderOpen,
+} from 'lucide-react';
 import { useStudioStore } from '../store/useStudioStore';
 import { useLanguage } from '../hooks/useLanguage';
 
+const MAIN_NAV = [
+  { path: '/',           label: 'Home',       icon: LayoutDashboard, end: true },
+  { path: '/episodes',   label: 'Episodes',   icon: Film },
+  { path: '/characters', label: 'Characters', icon: Users },
+];
+
+const ADVANCED_NAV = [
+  { path: '/rendering',  label: 'Render Queue', icon: ImageIcon },
+  { path: '/voice',      label: 'Voice Studio', icon: Mic2 },
+  { path: '/media',      label: 'Media',        icon: FolderOpen },
+  { path: '/comfyui',    label: 'ComfyUI',      icon: Wrench },
+];
+
 export function Sidebar() {
   const { sidebarOpen, toggleSidebar } = useStudioStore();
-  const { t, isRTL } = useLanguage();
-
-  const navItems = [
-    { path: '/', label: t.nav.dashboard, icon: LayoutDashboard },
-    { path: '/characters', label: t.nav.characters, icon: Users },
-    { path: '/episodes', label: t.nav.episodes, icon: Film },
-    { path: '/prompts', label: t.nav.prompts, icon: Sparkles },
-    { path: '/styles', label: t.nav.styles, icon: Palette },
-    { path: '/voice', label: t.nav.voice, icon: Mic2 },
-    { path: '/subtitles', label: t.nav.subtitles, icon: SubtitlesIcon },
-    { path: '/rendering', label: t.nav.rendering, icon: MonitorPlay },
-    { path: '/comfyui', label: 'ComfyUI Studio', icon: ImageIcon },
-    { path: '/media', label: t.nav.media, icon: FolderOpen },
-    { path: '/publishing', label: t.nav.publishing, icon: Share2 },
-    { path: '/settings', label: t.nav.settings, icon: Settings },
-  ];
+  const { isRTL } = useLanguage();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const positionClass = isRTL ? 'right-0' : 'left-0';
   const CollapseIcon = isRTL
@@ -29,28 +38,31 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`fixed ${positionClass} top-0 h-full bg-surface-light border-surface-border z-30
-        flex flex-col transition-all duration-300 ${sidebarOpen ? 'w-64' : 'w-16'}
-        ${isRTL ? 'border-l' : 'border-r'}`}
+      className={`fixed ${positionClass} top-0 h-full bg-surface-light z-30
+        flex flex-col transition-all duration-300
+        ${sidebarOpen ? 'w-56' : 'w-16'}
+        ${isRTL ? 'border-l' : 'border-r'} border-surface-border`}
     >
-      <div className="flex items-center h-16 px-4 border-b border-surface-border">
-        <Clapperboard className="w-7 h-7 text-accent-500 shrink-0" />
+      {/* Logo */}
+      <div className="flex items-center h-16 px-4 border-b border-surface-border shrink-0">
+        <Clapperboard className="w-6 h-6 text-accent-500 shrink-0" />
         {sidebarOpen && (
-          <span className={`${isRTL ? 'mr-3' : 'ml-3'} font-semibold text-lg text-white tracking-tight animate-fade-in`}>
+          <span className={`${isRTL ? 'mr-3' : 'ml-3'} font-semibold text-white tracking-tight animate-fade-in`}>
             StudioAI
           </span>
         )}
       </div>
 
-      <nav className="flex-1 py-4 overflow-y-auto">
-        <ul className="space-y-1 px-2">
-          {navItems.map((item) => (
+      {/* Main nav */}
+      <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden">
+        <ul className="space-y-0.5 px-2">
+          {MAIN_NAV.map((item) => (
             <li key={item.path}>
               <NavLink
                 to={item.path}
-                end={item.path === '/'}
+                end={item.end}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all
                   ${isActive
                     ? 'bg-accent-600/15 text-accent-400 border border-accent-700/30'
                     : 'text-studio-400 hover:text-studio-200 hover:bg-surface-lighter border border-transparent'
@@ -60,20 +72,86 @@ export function Sidebar() {
                 title={item.label}
               >
                 <item.icon className="w-5 h-5 shrink-0" />
-                {sidebarOpen && <span className="animate-fade-in truncate">{item.label}</span>}
+                {sidebarOpen && <span className="truncate animate-fade-in">{item.label}</span>}
               </NavLink>
             </li>
           ))}
         </ul>
+
+        {/* Divider */}
+        <div className="my-3 mx-4 border-t border-studio-800" />
+
+        {/* Advanced section */}
+        {sidebarOpen ? (
+          <div className="px-2">
+            <button
+              onClick={() => setAdvancedOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs
+                text-studio-600 hover:text-studio-400 transition-colors"
+            >
+              <span className="uppercase tracking-widest">Advanced</span>
+              <ChevronDown className={`w-3 h-3 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {advancedOpen && (
+              <ul className="space-y-0.5 mt-1">
+                {ADVANCED_NAV.map((item) => (
+                  <li key={item.path}>
+                    <NavLink
+                      to={item.path}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all
+                        ${isActive
+                          ? 'bg-accent-600/10 text-accent-400'
+                          : 'text-studio-600 hover:text-studio-300 hover:bg-surface-lighter'
+                        }`
+                      }
+                    >
+                      <item.icon className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          /* Collapsed: show wrench icon for advanced */
+          <div className="px-2">
+            <button
+              onClick={() => { toggleSidebar(); setAdvancedOpen(true); }}
+              className="w-full flex justify-center px-3 py-2.5 text-studio-700
+                hover:text-studio-500 transition-colors"
+              title="Advanced tools"
+            >
+              <Wrench className="w-4 h-4" />
+            </button>
+          </div>
+        )}
       </nav>
 
-      <button
-        onClick={toggleSidebar}
-        className="flex items-center justify-center h-12 border-t border-surface-border
-          text-studio-500 hover:text-studio-300 transition-colors"
-      >
-        <CollapseIcon className="w-5 h-5" />
-      </button>
+      {/* Settings + collapse */}
+      <div className="border-t border-surface-border shrink-0">
+        <NavLink
+          to="/settings"
+          className={({ isActive }) =>
+            `flex items-center gap-3 px-4 py-3 text-sm transition-colors
+            ${isActive ? 'text-accent-400' : 'text-studio-500 hover:text-studio-300'}
+            ${!sidebarOpen ? 'justify-center' : ''}`
+          }
+          title="Settings"
+        >
+          <Settings className="w-4 h-4 shrink-0" />
+          {sidebarOpen && <span className="animate-fade-in">Settings</span>}
+        </NavLink>
+        <button
+          onClick={toggleSidebar}
+          className={`w-full flex items-center py-3 border-t border-surface-border
+            text-studio-600 hover:text-studio-400 transition-colors
+            ${sidebarOpen ? 'justify-end px-4' : 'justify-center'}`}
+        >
+          <CollapseIcon className="w-4 h-4" />
+        </button>
+      </div>
     </aside>
   );
 }

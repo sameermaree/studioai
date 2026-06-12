@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
-    "validate": "npx tsx scripts/validate.ts"
+    "validate": "npx tsx scripts/validate.ts",
+    "studio": "concurrently --names \"EXPORT,AUDIO,FRONTEND\" --prefix-colors \"cyan,magenta,green\" --kill-others-on-fail \"python export_server.py\" \"python audio_server.py\" \"vite\"",
+    "export-server": "python export_server.py",
+    "audio-server": "python audio_server.py"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

@@ -223,11 +223,11 @@ export class ComfyUIProvider implements AIProvider {
     if (!response.ok) {
       // IPAdapter workflow MUST NOT fallback to dynamic build
       const isIPAdapterWorkflow = workflowPath.includes('ipadapter');
-      const errorMsg = isIPAdapterWorkflow
-        ? 'IPAdapter workflow file " + workflowPath + " not found (HTTP  + response.status + ).  +
-          'This workflow requires LoRA, IPAdapter, CLIP Vision, and Load Image nodes.  +
-          'Fallback to dynamic build is forbidden for IPAdapter workflows.'
-        : 'Failed to load workflow file "' + workflowPath + '" - falling back to dynamic build';
+            const errorMsg = isIPAdapterWorkflow
+        ? `IPAdapter workflow file ${workflowPath} not found (HTTP ${response.status}).
+This workflow requires LoRA, IPAdapter, CLIP Vision, and Load Image nodes.
+Fallback to dynamic build is forbidden for IPAdapter workflows.`
+        : `Workflow file ${workflowPath} not found`;
       
       if (isIPAdapterWorkflow) {
         console.error('[WORKFLOW LOADER] FATAL:', errorMsg);
@@ -241,20 +241,21 @@ export class ComfyUIProvider implements AIProvider {
         width: params.width,
         height: params.height,
         seed: params.seed,
-      });
+            });
     }
 
+    const workflowData = await response.json();
     
     // Validate: must be an object with numeric keys and class_type on each node
     const isNativeFormat = typeof workflowData === 'object' && !Array.isArray(workflowData);
     if (!isNativeFormat) {
       // IPAdapter workflow MUST NOT fallback to dynamic build
       const isIPAdapterWorkflow = workflowPath.includes('ipadapter');
-      const errorMsg = isIPAdapterWorkflow
-        ? 'IPAdapter workflow file " + workflowPath + " has invalid format.  +
-          'Expected native ComfyUI API format with numeric keys and class_type. ' +
-          'Fallback to dynamic build is forbidden for IPAdapter workflows.'
-        : 'Invalid workflow format for "' + workflowPath + '" - falling back to dynamic build';
+            const errorMsg = isIPAdapterWorkflow
+        ? `IPAdapter workflow file ${workflowPath} has invalid format.
+Expected native ComfyUI API format with numeric keys and class_type.
+Fallback to dynamic build is forbidden for IPAdapter workflows.`
+        : `Invalid workflow format for ${workflowPath} - falling back to dynamic build`;
       
       if (isIPAdapterWorkflow) {
         console.error('[WORKFLOW LOADER] FATAL:', errorMsg);

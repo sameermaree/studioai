@@ -113,9 +113,22 @@ Return a JSON object with these structures:
    */
   async enhanceStory(story: Story, language?: string): Promise<Story> {
     try {
-      // Analyze the narrative first
-      const analysis = await this.analyzeNarrative(story);
-      
+      // Analyze the narrative first.
+      // Fail-safe: catch any error and fall back to default (empty) analysis
+      // so enhancement failures never block the scene generation pipeline.
+      let analysis: NarrativeAnalysisResult;
+      try {
+        analysis = await this.analyzeNarrative(story);
+      } catch (analysisError) {
+        console.warn('[NARRATIVE ENHANCER] analyzeNarrative failed, returning story unchanged:', analysisError);
+        return story;
+      }
+      // Guard: LLM may return null/undefined for array fields on malformed JSON
+      analysis.issues.repetitiveScenes = Array.isArray(analysis.issues.repetitiveScenes) ? analysis.issues.repetitiveScenes : [];
+      analysis.issues.emotionalFlatness = Array.isArray(analysis.issues.emotionalFlatness) ? analysis.issues.emotionalFlatness : [];
+      analysis.issues.inconsistentEnvironments = Array.isArray(analysis.issues.inconsistentEnvironments) ? analysis.issues.inconsistentEnvironments : [];
+      analysis.issues.weakTransitions = Array.isArray(analysis.issues.weakTransitions) ? analysis.issues.weakTransitions : [];
+
       // If there are no significant issues, return the story unchanged
       if (
         analysis.issues.repetitiveScenes.length === 0 &&

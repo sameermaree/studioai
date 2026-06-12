@@ -47,6 +47,17 @@ interface StudioState {
   addRenderJob: (job: RenderJob) => void;
   updateRenderJob: (id: string, updates: Partial<RenderJob>) => void;
   deleteRenderJob: (id: string) => void;
+  // Production Studio actions
+  updateSceneOrders: (episodeId: string, orderedSceneIds: string[]) => void;
+  updateSceneDuration: (sceneId: string, duration: number) => void;
+  markEpisodeExportReady: (episodeId: string, value: boolean) => void;
+  updateSceneAudio: (sceneId: string, audio: {
+    audio_url?: string | null;
+    audio_duration?: number | null;
+    audio_status?: 'none' | 'generating' | 'done' | 'failed';
+    voice_id?: string | null;
+    voice_provider?: string | null;
+  }) => void;
 
   addPublishTarget: (target: PublishTarget) => void;
   updatePublishTarget: (id: string, updates: Partial<PublishTarget>) => void;
@@ -278,6 +289,63 @@ export const useStudioStore = create<StudioState>()((set, get) => ({
       },
       deleteRenderJob: (id) => {
         set((s) => ({ renderJobs: s.renderJobs.filter((j) => j.id !== id) }));
+        saveProjectNow(get);
+      },
+
+      // ── Production Studio Actions ───────────────────────────
+
+      updateSceneOrders: (episodeId, orderedSceneIds) => {
+        // Update order for all scenes in one operation, single save
+        set((s) => ({
+          episodes: s.episodes.map((ep) => {
+            if (ep.id !== episodeId) return ep;
+            const updatedScenes = ep.scenes.map((sc) => {
+              const newOrder = orderedSceneIds.indexOf(sc.id);
+              return newOrder !== -1 ? { ...sc, order: newOrder } : sc;
+            });
+            return { ...ep, scenes: updatedScenes, updated_at: new Date().toISOString() };
+          }),
+        }));
+        saveProjectNow(get);
+      },
+
+      updateSceneDuration: (sceneId, duration) => {
+        const clamped = Math.max(1, Math.min(300, duration));
+        set((s) => ({
+          episodes: s.episodes.map((ep) => ({
+            ...ep,
+            scenes: ep.scenes.map((sc) =>
+              sc.id === sceneId
+                ? { ...sc, duration: clamped, updated_at: new Date().toISOString() }
+                : sc
+            ),
+          })),
+        }));
+        saveProjectNow(get);
+      },
+
+      updateSceneAudio: (sceneId, audio) => {
+        set((s) => ({
+          episodes: s.episodes.map((ep) => ({
+            ...ep,
+            scenes: ep.scenes.map((sc) =>
+              sc.id === sceneId
+                ? { ...sc, ...audio, updated_at: new Date().toISOString() }
+                : sc
+            ),
+          })),
+        }));
+        saveProjectNow(get);
+      },
+
+      markEpisodeExportReady: (episodeId, value) => {
+        set((s) => ({
+          episodes: s.episodes.map((ep) =>
+            ep.id === episodeId
+              ? { ...ep, export_ready_marked: value, updated_at: new Date().toISOString() }
+              : ep
+          ),
+        }));
         saveProjectNow(get);
       },
 

@@ -15,6 +15,7 @@ import { useStudioStore } from '../store/useStudioStore';
 import { useLanguage } from '../hooks/useLanguage';
 import { generateEpisodeWorkflow } from '../services/workflow';
 import { CAMERA_ANGLES } from '../lib/constants';
+import { getEpisodeCharacterOptions } from '../lib/episodeCharacters';
 import type {
   Episode,
   Scene,
@@ -25,6 +26,8 @@ import { EpisodeStatusBadge } from '../components/episode/EpisodeStatusBadge';
 import { RenderStatusDot } from '../components/episode/RenderStatusDot';
 import { CreateSceneModal } from '../components/scene/CreateSceneModal';
 import { EpisodeWorkflowModal } from '../features/episodes/components/EpisodeWorkflowModal';
+import { CreationModeDialog } from '../features/episodes/components/CreationModeDialog';
+import { ManualEpisodeModal } from '../features/episodes/components/ManualEpisodeModal';
 
 export function Episodes() {
   const {
@@ -42,19 +45,22 @@ export function Episodes() {
   const { t } = useLanguage();
 
   const [showCreate, setShowCreate] = useState(false);
+  const [showModeSelect, setShowModeSelect] = useState(false);
+  const [showManualCreate, setShowManualCreate] = useState(false);
   const [selectedEp, setSelectedEp] = useState<string | null>(null);
   const [showSceneCreate, setShowSceneCreate] = useState(false);
 
   const selectedEpisode = episodes.find((episode) => episode.id === selectedEp);
 
-  const handleGenerateWorkflow = async (config: EpisodeWorkflowConfig) => {
+  const handleGenerateWorkflow = async (config: any) => {
     try {
       const result = await generateEpisodeWorkflow(config, stylePresets, characters);
 
       // Add episode with completed status since generation finished
       const completedEpisode = {
         ...result.episode,
-        status: 'rendered' as EpisodeStatus
+        status: 'rendered' as EpisodeStatus,
+        story_characters: (config.story_characters || result.episode.story_characters || []),
       };
       
       addEpisode(completedEpisode);
@@ -81,7 +87,7 @@ export function Episodes() {
         </div>
 
         <button
-          onClick={() => setShowCreate(true)}
+          onClick={() => setShowModeSelect(true)}
           className="btn-primary flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
@@ -146,7 +152,7 @@ export function Episodes() {
           {selectedEpisode ? (
             <EpisodeDetail
               episode={selectedEpisode}
-              characters={characters}
+              characters={getEpisodeCharacterOptions(selectedEpisode, characters)}
               onUpdate={(updates) => updateEpisode(selectedEpisode.id, updates)}
               onDelete={() => {
                 deleteEpisode(selectedEpisode.id);
@@ -174,11 +180,25 @@ export function Episodes() {
         />
       )}
 
+      {showModeSelect && (
+        <CreationModeDialog
+          onAuto={() => { setShowModeSelect(false); setShowCreate(true); }}
+          onManual={() => { setShowModeSelect(false); setShowManualCreate(true); }}
+          onClose={() => setShowModeSelect(false)}
+        />
+      )}
+
+      {showManualCreate && (
+        <ManualEpisodeModal
+          onClose={() => setShowManualCreate(false)}
+        />
+      )}
+
       {showSceneCreate && selectedEpisode && (
         <CreateSceneModal
           episodeId={selectedEpisode.id}
           sceneCount={selectedEpisode.scenes.length}
-          characters={characters}
+          characters={getEpisodeCharacterOptions(selectedEpisode, characters)}
           onSave={(scene) => {
             const updatedScenes = [...selectedEpisode.scenes, scene];
 

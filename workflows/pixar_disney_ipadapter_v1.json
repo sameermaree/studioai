@@ -2,11 +2,11 @@
   "3": {
     "inputs": {
       "seed": 42,
-      "steps": 8,
-      "cfg": 4.5,
+      "steps": 12,
+      "cfg": 5.5,
       "sampler_name": "dpmpp_sde",
       "scheduler": "karras",
-      "denoise": 1,
+      "denoise": 0.65,
       "model": [
         "10",
         0
@@ -20,7 +20,7 @@
         0
       ],
       "latent_image": [
-        "5",
+        "16",
         0
       ]
     },
@@ -98,7 +98,7 @@
         0
       ],
       "weight_type": "linear",
-      "weight": 0.7,
+      "weight": 0.85,
       "start_at": 0.0,
       "end_at": 1.0,
       "combine_embeds": "concat",
@@ -151,9 +151,22 @@
         1
       ],
       "lora_name": "pixar-sdxl-lora.safetensors",
-      "strength_model": 0.8,
-      "strength_clip": 0.8
+      "strength_model": 0.65,
+      "strength_clip": 0.65
     },
     "class_type": "LoraLoader"
+  },
+  "16": {
+    "inputs": {
+      "pixels": [
+        "13",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEEncode"
   }
 }

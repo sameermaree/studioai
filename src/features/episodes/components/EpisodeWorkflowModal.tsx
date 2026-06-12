@@ -296,6 +296,10 @@ export function EpisodeWorkflowModal({
     setIsGenerating(true);
 
     try {
+      // Diagnostic: verify storyCharacters state at submit time
+      console.log('[MODAL GENERATE] storyCharacters count:', storyCharacters.length);
+      console.log('[MODAL GENERATE] storyCharacters names:', storyCharacters.map(c => c.name));
+      console.log('[MODAL GENERATE] storyCharacters refs:', storyCharacters.map(c => c.reference_image_path ?? 'none'));
                         await onGenerate({
         title,
         story,

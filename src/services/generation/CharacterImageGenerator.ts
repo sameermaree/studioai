@@ -1,9 +1,9 @@
-﻿/**
+/**
  * CharacterImageGenerator
  *
  * Generates character reference images ONLY from Character Library entries
  * (CharacterBibleEntry). Uses the locked identity pipeline:
- * CharacterBibleEntry.character_prompt â†’ ComfyUI â†’ CharacterBibleEntry.reference_image_path
+ * CharacterBibleEntry.character_prompt → ComfyUI → CharacterBibleEntry.reference_image_path
  *
  * Architecture rules:
  * - Character generation happens ONLY from Character Library entries
@@ -18,6 +18,7 @@ import { buildStylePrefix, buildStyleNegative, getStyleFamilyLabel, classifyStyl
 import {selectCheckpoint, selectWorkflow, getPrimaryStyleFamily, selectIdentityWorkflow, selectIdentityCheckpoint} from "../style/StyleWorkflowRouter";
 import type { ProgressState } from './GenerationProgressTracker';
 import { makeProgress, makeError, DONE_PROGRESS, globalProgressTracker, makeGenerationKey } from './GenerationProgressTracker';
+import { ComfyUIExecutor, ComfyUIExecutorConfig } from '../../infrastructure/ai/providers/ComfyUIExecutor';
 import { ComfyUIProvider } from '../../infrastructure/ai/providers/ComfyUIProvider';
 
 export interface CharacterGenerationResult {
@@ -72,8 +73,10 @@ function sanitizeFinalPromptForComfyUI(raw: string): string {
   // Remove repeated "or, or, or" patterns
   cleaned = cleaned.replace(/(\bor\b\s*,?\s*){2,}/gi, "");
 
-  // Remove key:value patterns (malformed object-like text)
-  cleaned = cleaned.replace(/\b\w+\s*:\s*\w+/g, "");
+  // Remove key:value patterns (malformed object-like text).
+  // Fix 3: protect hyphenated style/identity terms like Pixar-style, crew-neck, side-swept.
+  // Only match bare word:word with optional spaces, not hyphenated compounds.
+  cleaned = cleaned.replace(/\b(?<![\w-])\w+\s{1,3}:\s{1,3}\w+/g, "");
 
   // Collapse repeated commas
   cleaned = cleaned.replace(/,{2,}/g, ",");
@@ -182,14 +185,53 @@ function extractAppearanceTraits(entry: CharacterBibleEntry, positivePrompt: str
     return null;
   }
 
+  // Build rich facial_structure from visual_description (not a placeholder)
+  const visualDesc = (entry.visual_description || '').trim();
+  // Extract face shape: look for known shapes in visual_description
+  const faceShapes = ['oval', 'round', 'square', 'narrow', 'heart', 'diamond', 'long', 'angular', 'soft'];
+  let faceShape = '';
+  const visualLower = visualDesc.toLowerCase();
+  for (const s of faceShapes) {
+    if (visualLower.includes(s)) { faceShape = s + ' face'; break; }
+  }
+  // Extract eyebrow description
+  const eyebrowTerms = ['thick', 'thin', 'arched', 'bushy', 'fine', 'dark', 'sharp', 'straight', 'curved'];
+  let eyebrowDesc = '';
+  const browMatch = visualDesc.match(/([a-z\s]+eyebrow[s]?)/i);
+  if (browMatch) eyebrowDesc = browMatch[0].trim();
+  else for (const t of eyebrowTerms) {
+    if (visualLower.includes(t + ' eyebrow') || visualLower.includes('eyebrow')) {
+      eyebrowDesc = t + ' eyebrows'; break;
+    }
+  }
+  // Build facial_structure from actual visual_description
+  const facialParts: string[] = [];
+  if (faceShape) facialParts.push(faceShape);
+  if (eyebrowDesc) facialParts.push(eyebrowDesc);
+  // Add skin tone if present
+  const skinMatch = visualDesc.match(/(light|medium|dark|olive|warm|fair|pale|tan|brown)[\s-]*(skin|complexion|tone)/i);
+  if (skinMatch) facialParts.push(skinMatch[0]);
+  // Add build if present
+  const buildMatch = visualDesc.match(/(slim|stocky|average|petite|athletic|chubby|lean|slender)[\s]*(build|frame|body)?/i);
+  if (buildMatch) facialParts.push(buildMatch[0].trim());
+  const facialStructure = facialParts.length > 0
+    ? facialParts.join(', ')
+    : (visualDesc.slice(0, 80) || 'stylized face consistent with reference image');
+
+  console.log('[IDENTITY EXTRACTED] hair:', hairstyle);
+  console.log('[IDENTITY EXTRACTED] outfit:', entry.outfit);
+  console.log('[IDENTITY EXTRACTED] face_shape:', faceShape || 'not detected');
+  console.log('[IDENTITY EXTRACTED] eyebrows:', eyebrowDesc || 'not detected');
+  console.log('[IDENTITY EXTRACTED] visual_description:', visualDesc.slice(0, 120));
+
   return {
-        hairstyle: hairstyle,
-        hair_color: hairColor || hairstyle, // fallback to hairstyle string itself
+        hairstyle: entry.hair || hairstyle,   // full hair description, not reduced
+        hair_color: hairColor || hairstyle,
         eye_color: eyeColor || (entry.eyes || ''),
-        outfit: entry.outfit,
+        outfit: entry.outfit,                  // full outfit with layers
         age_range: ageRange,
-        facial_structure: 'stylized facial features consistent with reference image',
-        body_proportions: 'stylized proportions consistent with reference image',
+        facial_structure: facialStructure,     // built from visual_description
+        body_proportions: ageRange || 'stylized proportions consistent with reference image',
         style_type: styleType,
   };
 }
@@ -220,13 +262,130 @@ export async function generateCharacterImage(
           })
         );
 
-                // ========== CHECK FOR LOCKED PARAMETERS ==========
+        // ========== CHECK FOR LOCKED PARAMETERS ==========
         // If identity is locked, reuse the same seed, workflow, and checkpoint
         // to ensure consistent identity.
         const isIdentityLocked = entry.identityLocked && entry.seed !== null && entry.workflow_path !== null && entry.checkpoint !== null;
         console.log('[CONSISTENCY] identityLocked:', isIdentityLocked, '| Character:', entry.name);
 
-                // ========== IDENTITY WORKFLOW ROUTING ==========
+        // ========== IDENTITY FIELD MINIMUM VALIDATION ==========
+        // Warn if critical identity fields are empty — identity lock will be blocked at save time.
+        const identityFieldsMissing: string[] = [];
+        if (!entry.hair || !entry.hair.trim()) identityFieldsMissing.push('hair');
+        if (!entry.eyes || !entry.eyes.trim()) identityFieldsMissing.push('eyes');
+        if (!entry.outfit || !entry.outfit.trim()) identityFieldsMissing.push('outfit');
+        if (!entry.visual_description || !entry.visual_description.trim()) identityFieldsMissing.push('visual_description');
+        if (identityFieldsMissing.length > 0) {
+          console.warn(`[IDENTITY FIELD GATE] Character "${entry.name}" is missing critical fields: ${identityFieldsMissing.join(', ')}`);
+          console.warn('[IDENTITY FIELD GATE] Identity lock will be BLOCKED after generation until these fields are filled.');
+        } else {
+          console.log(`[IDENTITY FIELD GATE] Character "${entry.name}" has all critical identity fields — lock eligible.`);
+        }
+
+        // ========== BUILD PROMPTS ==========
+        // Use locked prompts if available, otherwise build fresh
+        let finalPositivePrompt: string;
+        let finalNegativePrompt: string;
+
+        // ===== STRICT MANUAL PROMPT BYPASS =====
+        // If the user has typed a manual prompt, send it EXACTLY as-is
+        console.log('[CHARACTER FORM DATA] name:', entry.name);
+        console.log('[CHARACTER FORM DATA] age:', entry.age, '| gender:', entry.gender);
+        console.log('[CHARACTER FORM DATA] hair:', entry.hair);
+        console.log('[CHARACTER FORM DATA] eyes:', entry.eyes);
+        console.log('[CHARACTER FORM DATA] outfit:', entry.outfit);
+        console.log('[CHARACTER FORM DATA] visual_description:', entry.visual_description);
+        console.log('[CHARACTER FORM DATA] appearance_traits:', JSON.stringify(entry.appearance_traits));
+        console.log('[CHARACTER FORM DATA] character_prompt:', entry.character_prompt?.slice(0,120) ?? 'none');
+        console.log('[CHARACTER FORM DATA] identityLocked:', entry.identityLocked, '| seed:', entry.seed);
+
+        if (entry.character_prompt_manual && entry.character_prompt && entry.character_prompt.trim().length > 0) {
+          console.log('[MANUAL PROMPT MODE] Using manual prompt directly');
+          finalPositivePrompt = entry.character_prompt;
+          finalNegativePrompt = entry.negative_prompt || '';
+        } else if (isIdentityLocked && entry.generation_positive_prompt) {
+          // Reuse the exact same prompts that produced the reference image
+          finalPositivePrompt = entry.generation_positive_prompt;
+          finalNegativePrompt = entry.generation_negative_prompt || '';
+          console.log('[CONSISTENCY] Reusing locked prompts from previous generation');
+        } else {
+          // Build fresh prompts using the character's data
+          const styleFamily = (stylePresetIds && stylePresetIds.length > 0)
+            ? classifyStyleIds(stylePresetIds).find(f => f !== 'cinematic' && f !== 'unknown') || 'unknown'
+            : 'unknown';
+          console.log('[BASE CHARACTER PROMPT] styleFamily:', styleFamily);
+
+          // Build base prompts
+          let positivePrompt: string;
+          let negativePrompt: string;
+
+          if (entry.character_prompt && entry.character_prompt.trim().length > 5) {
+            // Use user-written character_prompt
+            positivePrompt = entry.character_prompt;
+            negativePrompt = entry.negative_prompt || buildCharacterPortraitNegative(entry, styleFamily);
+          } else if (styleFamily === 'cartoon') {
+            // Fix 1: identity FIRST, then Pixar style wrapper appended.
+            // buildCharacterPortraitPrompt includes all locked traits: age, hair, beard, outfit, face.
+            const identityBase = buildCharacterPortraitPrompt(entry, styleFamily);
+            const cartoonStyleWrapper = [
+              'Pixar-style 3D animated character',
+              'Disney-inspired stylized face',
+              'stylized 3D render',
+              'volumetric lighting',
+              'soft cinematic lighting',
+              'subsurface scattering',
+              'high-end animated film',
+              'smooth 3D shading',
+              'colorful family animation movie style',
+              'toy-like materials',
+              'clean simple background',
+            ].join(', ');
+            positivePrompt = identityBase + ', ' + cartoonStyleWrapper;
+            negativePrompt = buildCharacterPortraitNegative(entry, styleFamily);
+            console.log('[CHARACTER PROMPT BUILDER OUTPUT] cartoon identity base (first 300):', identityBase.slice(0,300));
+          } else {
+            positivePrompt = buildCharacterPortraitPrompt(entry, styleFamily);
+            negativePrompt = buildCharacterPortraitNegative(entry, styleFamily);
+          }
+          console.log('[CHARACTER PROMPT BUILDER OUTPUT] positive (first 300):', positivePrompt.slice(0,300));
+          console.log('[CHARACTER PROMPT BUILDER OUTPUT] negative (first 200):', negativePrompt.slice(0,200));
+
+          // Merge style keywords if style presets are active
+          finalPositivePrompt = positivePrompt;
+          finalNegativePrompt = negativePrompt;
+
+          if (stylePresetIds && stylePresetIds.length > 0) {
+            const combinedStyle = stylePresetIds
+              .map(id => getStyleKeywords(id))
+              .filter(Boolean)
+              .join('. ');
+            const stylePrefix = buildStylePrefix(stylePresetIds);
+            const styleNegativeAdditions = buildStyleNegative(stylePresetIds);
+
+            const prefixParts = [combinedStyle, stylePrefix].filter(Boolean);
+            const fullPrefix = prefixParts.join(', ');
+            if (fullPrefix) {
+              finalPositivePrompt = fullPrefix + ', ' + positivePrompt;
+            }
+            if (styleNegativeAdditions) {
+              finalNegativePrompt = (negativePrompt ? negativePrompt + ', ' : '') + styleNegativeAdditions;
+            }
+          }
+
+          // Apply prompt sanitization
+          const preSanitizePositive = finalPositivePrompt;
+          const preSanitizeNegative = finalNegativePrompt;
+          finalPositivePrompt = sanitizeFinalPromptForComfyUI(finalPositivePrompt);
+          finalNegativePrompt = sanitizeFinalPromptForComfyUI(finalNegativePrompt);
+          console.log('[CHARACTER PROMPT FINAL] pre-sanitize positive (first 400):', preSanitizePositive.slice(0,400));
+          console.log('[CHARACTER PROMPT FINAL] post-sanitize positive (first 400):', finalPositivePrompt.slice(0,400));
+          console.log('[CHARACTER PROMPT FINAL] identity tokens present:',
+            ['bald','beard','suit','adult','age','old'].filter(t => finalPositivePrompt.toLowerCase().includes(t)));
+          console.log('[PROMPT] Final positive:', finalPositivePrompt);
+        }
+
+
+        // ========== IDENTITY WORKFLOW ROUTING (EXECUTOR) ==========
         // Two modes:
         //   A) Normal character generation (no reference image):
         //      -> workflows/pixar_disney_stable.json (DreamShaperXL only)
@@ -243,19 +402,39 @@ export async function generateCharacterImage(
         console.log('[IDENTITY ROUTER] shouldUseIPAdapter:', shouldUseIPAdapter);
 
         // Select workflow based on reference image availability
-        const selectedWorkflow = selectIdentityWorkflow(shouldUseIPAdapter);
+        // EXECUTOR: use pixar_disney_*.json files directly (no dynamic generation)
+        const resolvedWorkflow = shouldUseIPAdapter
+          ? 'workflows/pixar_disney_ipadapter_v1.json'
+          : 'workflows/pixar_disney_stable.json';
         const selectedCheckpoint = selectIdentityCheckpoint();
         const workflowFamily = 'pixar-disney';
         const activeStyleIds = isIdentityLocked ? entry.style_preset_ids : (stylePresetIds || []);
-        const debugSeed = isIdentityLocked ? entry.seed! : (entry.seed ?? Math.floor(Math.random() * 2147483647));
+
+        // ========== SEED REUSE ENFORCEMENT ==========
+        // Determinism rule: reuse saved seed when identity exists.
+        // Only generate a new seed for truly new characters (no saved seed, no reference image).
+        let debugSeed: number;
+        if (isIdentityLocked && entry.seed !== null) {
+          // Fully locked: reuse exact seed
+          debugSeed = entry.seed;
+          console.log('[IDENTITY SEED USED] Reusing locked seed:', debugSeed, '| Character:', entry.name);
+        } else if (entry.seed !== null && entry.seed !== undefined) {
+          // Has a saved seed (from previous generation) but not fully locked — still reuse
+          debugSeed = entry.seed;
+          console.log('[IDENTITY SEED USED] Reusing saved seed:', debugSeed, '| Character:', entry.name);
+        } else {
+          // Truly new character: generate fresh seed
+          debugSeed = Math.floor(Math.random() * 2147483647);
+          console.log('[NEW SEED GENERATED]', debugSeed, '| Character:', entry.name);
+        }
 
         console.log('[CONSISTENCY] seed:', debugSeed);
-        console.log('[CONSISTENCY] workflow:', selectedWorkflow);
+        console.log('[CONSISTENCY] workflow (resolved):', resolvedWorkflow);
         console.log('[CONSISTENCY] checkpoint:', selectedCheckpoint);
         console.log('[CONSISTENCY] stylePresetIds:', activeStyleIds);
 
         // HARD VALIDATION: If IPAdapter workflow is selected, reference image path MUST exist
-        if (selectedWorkflow.includes('ipadapter') && !hasReferenceImage) {
+        if (resolvedWorkflow.includes('ipadapter') && !hasReferenceImage) {
           const errMsg = 'IPAdapter identity workflow requires a reference image path. ' +
             'Character "' + entry.name + '" has no reference image. ' +
             'Generate a normal image first, then use identity mode.';
@@ -264,107 +443,161 @@ export async function generateCharacterImage(
         }
 
         // HARD VALIDATION: If no reference image, we MUST NOT use IPAdapter workflow
-        if (!hasReferenceImage && selectedWorkflow.includes('ipadapter')) {
+        if (!hasReferenceImage && resolvedWorkflow.includes('ipadapter')) {
           const errMsg = 'Internal error: IPAdapter workflow selected without reference image. ' +
             'Falling back to stable workflow is not allowed. Aborting.';
           console.error('[IDENTITY ERROR]', errMsg);
           throw new Error(errMsg);
         }
 
-// ========== WORKFLOW DIMENSION DIAGNOSTIC ==========
-        // DETECT SDXL models that need 1024x1024 instead of 512x512
-        const IS_SDXL_MODEL = selectedCheckpoint.toLowerCase().includes('xl');
-        const RECOMMENDED_WIDTH = IS_SDXL_MODEL ? 1024 : 512;
-        const RECOMMENDED_HEIGHT = IS_SDXL_MODEL ? 1024 : 512;
-        console.log('[WORKFLOW DIAGNOSTIC]');
-        console.log('[WORKFLOW DIAGNOSTIC] Model:', selectedCheckpoint);
-        console.log('[WORKFLOW DIAGNOSTIC] Is SDXL:', IS_SDXL_MODEL);
-        console.log('[WORKFLOW DIAGNOSTIC] Recommended size:', RECOMMENDED_WIDTH, 'x', RECOMMENDED_HEIGHT);
-        console.log('[WORKFLOW DIAGNOSTIC] Current fallback size: 512 x 512');
-        if (IS_SDXL_MODEL) {
-          console.warn('[WORKFLOW DIAGNOSTIC] WARNING: SDXL model with 512x512 will produce corrupted/glitched images!');
-          console.warn('[WORKFLOW DIAGNOSTIC] The file workflows/default_txt2img.json does NOT exist - falling back to buildPromptWorkflow()');
-          console.warn('[WORKFLOW DIAGNOSTIC] buildPromptWorkflow() uses 512x512 by default, which breaks SDXL models.');
-          console.warn('[WORKFLOW DIAGNOSTIC] REQUESTED FIX: Either create workflows/default_txt2img.json with 1024x1024,');
-          console.warn('[WORKFLOW DIAGNOSTIC]   or update CharacterImageGenerator to pass width/height based on model type.');
-        }
-
-        // ========== WORKFLOW FILE AS SOURCE OF TRUTH ==========
-        const isFileWorkflow = selectedWorkflow !== 'workflows/default_txt2img.json' && selectedWorkflow !== 'workflows/cartoon_txt2img.json';
-        console.log('[USING FILE WORKFLOW]', isFileWorkflow ? 'TRUE' : 'FALSE');
-        console.log('[WORKFLOW SOURCE] Using file-based workflow:', selectedWorkflow);
-
         // Calculate appropriate dimensions based on checkpoint type
-        const genWidth = IS_SDXL_MODEL ? 1024 : 512;
-        const genHeight = IS_SDXL_MODEL ? 1024 : 512;
+        const isSdxlModel = selectedCheckpoint && selectedCheckpoint.toLowerCase().includes('xl');
+        const genWidth = isSdxlModel ? 1024 : 512;
+        const genHeight = isSdxlModel ? 1024 : 512;
         console.log('[WORKFLOW DIMENSIONS] Generators will use:', genWidth, 'x', genHeight);
 
-        // Create a direct ComfyUI provider connection
-        const provider = new ComfyUIProvider({
+        // Create ComfyUI executor for deterministic JSON-first execution
+        const executor = new ComfyUIExecutor({
           baseUrl: 'http://127.0.0.1:8188',
           clientId: 'seri-ai-char-' + Date.now() + '',
-          defaultImageWidth: genWidth,
-          defaultImageHeight: genHeight,
           connectionTimeout: 10000,
         });
+
+        // Build workflowInputs for IPAdapter.
+        // Before injecting LoadImage node 13, ensure the reference file
+        // exists in ComfyUI input/ (LoadImage reads from input/ only, not output/).
+        // Flow: check input/ -> if missing, fetch from output/ and POST to /upload/image.
+        const workflowInputs: Record<string, any> = {};
+        // Patch: prefer reference_image_for_ipadapter (stable base identity) over
+        // reference_image_path (latest output, changes every generation).
+        // This prevents IPAdapter outputs from drifting the identity reference.
+        const baseIdentityRef = entry.reference_image_for_ipadapter || entry.reference_image_path;
+        if (shouldUseIPAdapter && hasReferenceImage && baseIdentityRef) {
+          const refFilename = baseIdentityRef.split('/').pop()?.split('\\').pop() || 'reference.png';
+          const comfyBase = 'http://127.0.0.1:8188';
+
+          // Step 1: check ComfyUI input/ folder
+          let refReadyInInput = false;
+          try {
+            const inputCheckRes = await fetch(
+              `${comfyBase}/view?filename=${encodeURIComponent(refFilename)}&type=input`,
+              { method: 'HEAD' }
+            );
+            if (inputCheckRes.ok) {
+              refReadyInInput = true;
+              console.log('[IPADAPTER REF INPUT EXISTS]', refFilename);
+            }
+          } catch {
+            // HEAD not supported or network error — proceed to output fallback
+          }
+
+          // Step 2: not in input — fetch from output/ and upload to input/
+          if (!refReadyInInput) {
+            try {
+              const outputRes = await fetch(
+                `${comfyBase}/view?filename=${encodeURIComponent(refFilename)}&type=output`
+              );
+              if (!outputRes.ok) {
+                throw new Error(`File not found in output/: ${refFilename} (HTTP ${outputRes.status})`);
+              }
+              console.log('[IPADAPTER REF OUTPUT EXISTS]', refFilename);
+
+              // Step 3: POST to ComfyUI /upload/image -> places file in input/
+              const blob = await outputRes.blob();
+              const formData = new FormData();
+              formData.append('image', blob, refFilename);
+              formData.append('overwrite', 'true');
+
+              const uploadRes = await fetch(`${comfyBase}/upload/image`, {
+                method: 'POST',
+                body: formData,
+              });
+
+              if (!uploadRes.ok) {
+                const errText = await uploadRes.text();
+                throw new Error(`Upload to input/ failed (HTTP ${uploadRes.status}): ${errText}`);
+              }
+
+              console.log('[IPADAPTER REF COPY OK]', refFilename, '-> ComfyUI input/');
+              refReadyInInput = true;
+            } catch (copyErr) {
+              const msg = copyErr instanceof Error ? copyErr.message : String(copyErr);
+              console.error('[IPADAPTER REF COPY FAILED]', msg);
+              console.error('[IPADAPTER REF] input/ path checked:', `${comfyBase}/view?filename=${refFilename}&type=input`);
+              console.error('[IPADAPTER REF] output/ path checked:', `${comfyBase}/view?filename=${refFilename}&type=output`);
+              throw new Error(`IPAdapter reference image could not be prepared: ${refFilename}. ${msg}`);
+            }
+          }
+
+          // Step 4: inject LoadImage node only after confirming input/ has the file
+          if (refReadyInInput) {
+            workflowInputs['13'] = {
+              class_type: 'LoadImage',
+              inputs: {
+                image: refFilename,
+              },
+            };
+            console.log('[EXECUTOR IPADAPTER] LoadImage node 13 injected with input/ file:', refFilename);
+          }
+        }
+
         // ========== FINAL PROMPT DEBUG ==========
         console.log('');
         console.log('========== CONSISTENCY PIPELINE DEBUG ==========');
         console.log('[FINAL POSITIVE PROMPT]', finalPositivePrompt);
         console.log('[FINAL NEGATIVE PROMPT]', finalNegativePrompt);
         console.log('[FINAL STYLE IDS]', JSON.stringify(activeStyleIds));
-        console.log('[FINAL WORKFLOW PATH]', selectedWorkflow);
+        console.log('[FINAL WORKFLOW PATH]', resolvedWorkflow);
         console.log('[FINAL CHECKPOINT]', selectedCheckpoint);
         console.log('[FINAL SEED]', debugSeed);
         console.log('============================================');
         console.log('');
 
         console.log('');
-        console.log('========== CALLING COMFYUI ==========');
+        console.log('========== CALLING COMFYUI EXECUTOR ==========');
         console.log('[MODE]', entry.character_prompt_manual ? 'MANUAL (zero transformations)' : 'AUTO');
         console.log('[PROMPT TO COMFYUI]', finalPositivePrompt);
         console.log('[NEGATIVE TO COMFYUI]', finalNegativePrompt);
+        console.log('[COMFYUI POSITIVE PROMPT]', finalPositivePrompt);
+        console.log('[COMFYUI NEGATIVE PROMPT]', finalNegativePrompt);
         console.log('[SEED TO COMFYUI]', debugSeed);
-        console.log('[MODEL TO COMFYUI]', selectedCheckpoint);
-        console.log('[WORKFLOW TO COMFYUI]', selectedWorkflow);
-        console.log('======================================');
+        console.log('[WORKFLOW TO COMFYUI]', resolvedWorkflow);
+        console.log('[MODEL (from workflow)]', selectedCheckpoint);
+        console.log('===============================================');
         console.log('');
 
-        // Call provider.generateImage directly
-                        // Build workflow inputs for IPAdapter reference image injection
-        const workflowInputs: Record<string, any> = {};
-        if (shouldUseIPAdapter && hasReferenceImage && entry.reference_image_path) {
-          // Inject the character's reference image into the Load Image node (node 13)
-          workflowInputs['13'] = {
-            class_type: 'LoadImage',
-            inputs: {
-              image: entry.reference_image_path,
-            }
-          };
-          console.log('[IPADAPTER INJECTION] Reference image path:', entry.reference_image_path);
-          console.log('[IPADAPTER INJECTION] Injected into node 13 (LoadImage)');
-        }
-
-        const imageResult = await provider.generateImage(finalPositivePrompt, {
+        const imageResult = await executor.generateImage(finalPositivePrompt, {
           negativePrompt: finalNegativePrompt,
           seed: debugSeed,
-          model: selectedCheckpoint,
-          workflowPath: selectedWorkflow,
+          workflowPath: resolvedWorkflow,
           width: genWidth,
           height: genHeight,
           workflowInputs: Object.keys(workflowInputs).length > 0 ? workflowInputs : undefined,
         });
+
         // result.url = http://127.0.0.1:8188/view?filename=seri_ai_XXXXX.png&type=output
         const imageUrl = imageResult.url || '';
-        console.log('[CHAR IMAGE] filename:', imageUrl.split('filename=')[1]?.split('&')[0] || 'unknown');
-        console.log('[CHAR IMAGE] url:', imageUrl);
+        console.log('[CHAR IMAGE] raw url:', imageUrl);
+
+        // ========== NORMALIZE REFERENCE PATH ==========
+        // Extract plain filename for deterministic LoadImage on next generation.
+        // ComfyUI LoadImage requires just "filename.png", not a full URL.
+        let normalizedImageFilename = imageUrl;
+        if (imageUrl.includes('filename=')) {
+          // URL format: http://127.0.0.1:8188/view?filename=seri_ai_pixar_00062_.png&type=output
+          normalizedImageFilename = decodeURIComponent(imageUrl.split('filename=')[1]?.split('&')[0] || imageUrl);
+        } else if (imageUrl.includes('/') || imageUrl.includes('\\')) {
+          // Path format: extract basename
+          normalizedImageFilename = imageUrl.split('/').pop()?.split('\\').pop() || imageUrl;
+        }
+        console.log('[CHAR IMAGE] normalized filename:', normalizedImageFilename);
 
         // ===== VALIDATED APPEARANCE TRAITS EXTRACTION =====
         // CRITICAL: Never overwrite valid identity with defaults or corrupted data.
         // Three outcomes:
-        //   1. Image URL is invalid/corrupted â†’ abort ALL identity updates (image + traits + lock)
-        //   2. Extracted traits are null (empty fields) â†’ abort trait update only, save new image
-        //   3. Both valid â†’ safe to save everything
+        //   1. Image URL is invalid/corrupted → abort ALL identity updates (image + traits + lock)
+        //   2. Extracted traits are null (empty fields) → abort trait update only, save new image
+        //   3. Both valid → safe to save everything
 
         // Extract appearance traits from character data for locking
         const rawAppearanceTraits = extractAppearanceTraits(entry, finalPositivePrompt);
@@ -380,8 +613,10 @@ export async function generateCharacterImage(
         const traitsAreValid = rawAppearanceTraits !== null;
 
         let appearanceTraitsToSave = rawAppearanceTraits;
-        let identityLockedToSave = true;
-        let refImageToSave = imageUrl;
+        // IDENTITY LOCK GUARD: Only lock when BOTH image AND traits are valid.
+        // Prevents locking identity with empty traits (which causes drift on regeneration).
+        let identityLockedToSave = imageIsValid && traitsAreValid;
+        let refImageToSave = normalizedImageFilename; // Use normalized filename, not full URL
 
         if (!imageIsValid) {
           console.warn('[CONSISTENCY EXTRACTION FAILED] Image URL is invalid/corrupted - identity not updated');
@@ -390,22 +625,36 @@ export async function generateCharacterImage(
           identityLockedToSave = entry.identityLocked ?? false; // Keep existing
           refImageToSave = entry.reference_image_path || ''; // Keep existing reference image
         } else if (!traitsAreValid) {
-          console.warn('[CONSISTENCY EXTRACTION FAILED] Extracted traits are null/empty - identity not updated');
+          console.warn('[CONSISTENCY EXTRACTION FAILED] Extracted traits are null/empty - identity NOT locked');
+          console.warn('[CONSISTENCY] Identity lock blocked: traits extraction returned null. Fill in hair/eyes/outfit to enable identity lock.');
           appearanceTraitsToSave = entry.appearance_traits; // Keep existing traits
-          // Image IS valid, so save the new image URL but preserve old traits
-          console.log('[CONSISTENCY] New image URL saved but appearance traits preserved from previous identity');
+          identityLockedToSave = false; // DO NOT lock without valid traits
+          // Image IS valid, so save the new image but do not claim identity lock
+          console.log('[CONSISTENCY] New image saved but identity NOT locked (missing traits)');
         } else {
-          console.log('[CONSISTENCY VALIDATION PASSED] Extracted traits are valid, saving full identity');
+          console.log('[CONSISTENCY VALIDATION PASSED] Image + traits valid, identity LOCKED');
+          console.log('[IDENTITY LOCKED] Character:', entry.name, '| Seed:', debugSeed, '| Traits:', JSON.stringify(rawAppearanceTraits));
+          console.log('[LOCKED IDENTITY SAVED] face:', appearanceTraitsToSave?.facial_structure ?? 'none');
+          console.log('[LOCKED IDENTITY SAVED] hair:', appearanceTraitsToSave?.hairstyle ?? 'none');
+          console.log('[LOCKED IDENTITY SAVED] outfit:', appearanceTraitsToSave?.outfit ?? 'none');
+          console.log('[LOCKED IDENTITY SAVED] eyes:', appearanceTraitsToSave?.eye_color ?? 'none');
         }
+
+        // reference_image_for_ipadapter policy:
+        // - Set ONLY if missing (first generation builds the base identity reference).
+        // - NOT overwritten by IPAdapter outputs on subsequent generations.
+        // - Only an explicit user action (Lock This Image) should update it.
+        const baseRefToSave = entry.reference_image_for_ipadapter || refImageToSave;
+        console.log('[IPADAPTER BASE REF] Using:', baseRefToSave, '| Latest output:', refImageToSave);
 
         // Update the entry with all generation metadata
         const updatedEntry: CharacterBibleEntry = {
           ...entry,
           identityLocked: identityLockedToSave,
-          reference_image_path: refImageToSave,
-          reference_image_for_ipadapter: refImageToSave,
+          reference_image_path: refImageToSave,    // Latest output — display / preview
+          reference_image_for_ipadapter: baseRefToSave, // Stable base identity — LoadImage node 13
           seed: debugSeed,
-          workflow_path: selectedWorkflow,
+          workflow_path: resolvedWorkflow,
           checkpoint: selectedCheckpoint,
           generation_positive_prompt: finalPositivePrompt,
           generation_negative_prompt: finalNegativePrompt,
@@ -437,3 +686,42 @@ export async function generateCharacterImage(
   }
 }
 
+/**
+ * Generate reference images for a batch of characters.
+ * Processes sequentially to avoid ComfyUI queue contention.
+ *
+ * @param characters - Array of CharacterBibleEntry to generate images for
+ * @param onProgress - Optional progress callback
+ * @returns Array of generation results
+ */
+export async function generateCharacterImagesBatch(
+  characters: CharacterBibleEntry[],
+  onProgress?: CharacterProgressCallback
+): Promise<CharacterGenerationResult[]> {
+  if (characters.length === 0) {
+    onProgress?.(DONE_PROGRESS);
+    return [];
+  }
+
+  const results: CharacterGenerationResult[] = [];
+
+  for (let i = 0; i < characters.length; i++) {
+    const entry = characters[i];
+
+    onProgress?.(
+      makeProgress({
+        phase: 'Generating character images',
+        currentItem: i + 1,
+        totalItems: characters.length,
+        label: `Character ${i + 1}/${characters.length}: ${entry.name}`,
+        estimatedRemaining: `~${(characters.length - i - 1) * 15}s remaining`,
+      })
+    );
+
+    const result = await generateCharacterImage(entry, onProgress);
+    results.push(result);
+  }
+
+  onProgress?.(DONE_PROGRESS);
+  return results;
+}

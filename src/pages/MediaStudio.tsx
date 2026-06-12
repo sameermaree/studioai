@@ -11,6 +11,7 @@ export function MediaStudio() {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showUpload, setShowUpload] = useState(false);
+  const [previewAsset, setPreviewAsset] = useState<MediaAsset | null>(null);
 
   const filtered = mediaAssets
     .filter((m) => filter === 'all' || m.type === filter)
@@ -63,7 +64,7 @@ export function MediaStudio() {
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {filtered.map((asset) => (
-            <MediaCard key={asset.id} asset={asset} onDelete={() => deleteMediaAsset(asset.id)} />
+            <MediaCard key={asset.id} asset={asset} onDelete={() => deleteMediaAsset(asset.id)} onPreview={() => setPreviewAsset(asset)} />
           ))}
         </div>
       ) : (
@@ -85,15 +86,51 @@ export function MediaStudio() {
           }}
         />
       )}
+
+      {previewAsset && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          onClick={() => setPreviewAsset(null)}
+        >
+          <div
+            className="relative max-w-4xl w-full bg-surface rounded-xl overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-surface-border">
+              <div>
+                <p className="text-sm font-medium text-white">{previewAsset.name}</p>
+                <div className="flex gap-2 mt-0.5 flex-wrap">
+                  {previewAsset.tags.map((tag) => (
+                    <span key={tag} className="text-[10px] text-studio-400">{tag}</span>
+                  ))}
+                </div>
+              </div>
+              <button
+                onClick={() => setPreviewAsset(null)}
+                className="p-1.5 rounded-md text-studio-400 hover:text-white hover:bg-surface-lighter transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="bg-studio-900 flex items-center justify-center min-h-[300px] max-h-[70vh]">
+              <img
+                src={previewAsset.url}
+                alt={previewAsset.name}
+                className="max-w-full max-h-[70vh] object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function MediaCard({ asset, onDelete }: { asset: MediaAsset; onDelete: () => void }) {
+function MediaCard({ asset, onDelete, onPreview }: { asset: MediaAsset; onDelete: () => void; onPreview: () => void }) {
   const TypeIcon = asset.type === 'image' ? Image : asset.type === 'video' ? Video : Music;
 
   return (
-    <div className="group rounded-xl bg-surface-light border border-surface-border overflow-hidden hover:border-accent-600/40 transition-all">
+    <div className="group rounded-xl bg-surface-light border border-surface-border overflow-hidden hover:border-accent-600/40 transition-all cursor-pointer" onClick={onPreview}>
       <div className="aspect-square bg-studio-800 relative overflow-hidden">
         {asset.thumbnail_url ? (
           <img src={asset.thumbnail_url} alt={asset.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />

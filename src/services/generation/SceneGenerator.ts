@@ -17,6 +17,7 @@ import type { Scene, CharacterBibleEntry, LocationBibleEntry } from '../../types
 import { injectBibleCharactersIntoScene } from '../character/CharacterPromptBuilder';
 import type { ProgressState } from './GenerationProgressTracker';
 import { makeProgress, makeError, DONE_PROGRESS, globalProgressTracker, makeGenerationKey } from './GenerationProgressTracker';
+import { ComfyUIExecutor } from '../../infrastructure/ai/providers/ComfyUIExecutor';
 
 export interface SceneGenerationResult {
   scene: Scene;
@@ -174,15 +175,33 @@ export async function generateSceneImage(
       };
     }
 
+    // Patch 1: filter characters to scene-relevant only, hard cap at 2.
+    // Injecting all episode characters (e.g. 13) causes prompt overflow and unstable images.
+    // Priority: characters whose IDs are in scene.characters[] first.
+    // Fallback: first 2 of all characters if scene.characters is empty.
+    const sceneCharacterIds: string[] = input.scene.characters ?? [];
+    const sceneRelevantChars = sceneCharacterIds.length > 0
+      ? input.characters.filter((c) => sceneCharacterIds.includes(c.id))
+      : [];
+    const charsForPrompt = (sceneRelevantChars.length > 0
+      ? sceneRelevantChars
+      : input.characters
+    ).slice(0, 2);
+
+    console.log(`[SCENE GEN] characters: ${input.characters.length} total → ${charsForPrompt.length} injected (scene IDs: ${sceneCharacterIds.length})`);
+    for (const ch of charsForPrompt) {
+      console.log(`[SCENE GEN] [CHARACTER LOCK] "${ch.name}": outfit="${ch.outfit}", identityLocked=${ch.identityLocked}, ref_img=${ch.reference_image_path ? 'yes' : 'no'}`);
+    }
+
     // Build the scene prompt with locked references (identity-preserving)
     const { prompt, negativePrompt, referenceImages } = buildScenePromptWithReferences(
       input.scene,
-      input.characters,
+      charsForPrompt,
       input.locations
     );
 
     // Get locked character/location reference paths
-    const characterReferences: string[] = input.characters
+    const characterReferences: string[] = charsForPrompt
       .map((c) => c.reference_image_path)
       .filter((p): p is string => p !== null);
 
@@ -190,38 +209,51 @@ export async function generateSceneImage(
       .map((l) => l.reference_image_path)
       .filter((p): p is string => p !== null);
 
-    // ISSUE 2: Log text-only consistency mode for visibility
-    if (characterReferences.length > 0) {
-      console.log('[TEXT ONLY CONSISTENCY MODE] Character reference images exist but NOT passed to ComfyUI conditioning.');
-      console.log('[TEXT ONLY CONSISTENCY MODE] Character identity preserved via TEXT prompt injection.');
-      for (const ch of input.characters) {
-        console.log(`[CHARACTER LOCK] "${ch.name}": seed=${ch.seed}, outfit="${ch.outfit}", hair="${ch.hair}", eyes="${ch.eyes}", age=${ch.age}, ref_img=${ch.reference_image_path ? 'yes' : 'no'}`);
+    console.log('[SCENE GEN] prompt built:', prompt.slice(0, 120) + (prompt.length > 120 ? '...' : ''));
+    console.log('[SCENE GEN] negative:', negativePrompt.slice(0, 80) + (negativePrompt.length > 80 ? '...' : ''));
+
+    // Phase 1: use pixar_disney_stable.json — text-prompt identity injection only.
+    // Scene IPAdapter / dedicated scene workflow added in a future phase.
+    const SCENE_WORKFLOW = 'workflows/pixar_disney_stable.json';
+    console.log('[SCENE GEN] workflow selected:', SCENE_WORKFLOW);
+
+    const executor = new ComfyUIExecutor({
+      baseUrl: 'http://127.0.0.1:8188',
+      clientId: `seri-ai-scene-${input.scene.id.slice(0, 8)}-${Date.now()}`,
+      connectionTimeout: 30_000,
+    });
+
+    const imageResult = await executor.generateImage(prompt, {
+      negativePrompt,
+      seed: input.scene.seed ?? undefined,
+      workflowPath: SCENE_WORKFLOW,
+    });
+
+    console.log('[SCENE GEN] ComfyUI result:', imageResult.url ? 'OK' : 'EMPTY', '| url:', imageResult.url?.slice(0, 80));
+
+    // Normalize the returned URL to a plain filename for storage
+    const rawUrl = imageResult.url || '';
+    let imagePath: string | null = null;
+    if (rawUrl) {
+      if (rawUrl.includes('filename=')) {
+        imagePath = decodeURIComponent(rawUrl.split('filename=')[1]?.split('&')[0] || rawUrl);
+      } else {
+        imagePath = rawUrl.split('/').pop() || rawUrl;
       }
     }
-    if (locationReferences.length > 0) {
-      console.log('[LOCATION LOCK] Text-only consistency mode for locations.');
+
+    console.log('[SCENE GEN] saved image path:', imagePath);
+
+    if (!imagePath) {
+      throw new Error('ComfyUI returned empty image URL for scene: ' + input.scene.title);
     }
 
-    // TODO: Replace with actual ComfyUIService call when available
-    // Uses referenceImages as controlnet/ip-adapter inputs for identity preservation
-    // const comfyUI = ComfyUIService.getInstance();
-    // const result = await comfyUI.generateImage(prompt, {
-    //   negativePrompt,
-    //   seed: input.scene.seed ?? undefined,
-    //   referenceImages, // IP-Adapter / ControlNet inputs for identity lock
-    //   assetDisplayName: `scene-${input.scene.order}`,
-    //   assetCategory: 'scene',
-    //   relatedEntityId: input.scene.id,
-    //   relatedEntityType: 'scene',
-    // });
-
-    // Simulated generation for now — placeholder until ComfyUI integration
-    const simulatedImagePath = `data/projects/default-project/assets/scenes/scene_${input.scene.order}_${input.scene.id.slice(0, 8)}.png`;
-
-    // Update the scene with the generated image reference
+    // Update the scene with the real generated image reference
     const updatedScene: Scene = {
       ...input.scene,
-      image_references: [...referenceImages, simulatedImagePath],
+      render_url: imagePath,
+      render_status: 'completed',
+      image_references: [...referenceImages, imagePath],
       updated_at: new Date().toISOString(),
     };
 
@@ -229,7 +261,7 @@ export async function generateSceneImage(
 
     return {
       scene: updatedScene,
-      imagePath: simulatedImagePath,
+      imagePath,
       success: true,
       characterReferences,
       locationReferences,

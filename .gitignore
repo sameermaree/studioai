@@ -21,3 +21,14 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.studio_api_keys.json
+
+audio/
+exports/
+
+src.zip
+
+*.mp3
+*.mp4
+
+data/projects/default-project/backups/

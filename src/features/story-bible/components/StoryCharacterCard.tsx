@@ -44,6 +44,21 @@ interface StoryCharacterCardProps {
   stylePresetIds?: string[];
 }
 
+// Display URL builder: converts stored plain filename -> full ComfyUI view URL for <img src>.
+// reference_image_path in the store is intentionally kept as plain filename for LoadImage.
+// This function handles all three formats that may exist in the store:
+//   'X.png'                                             -> full ComfyUI URL
+//   '/view?filename=X.png&type=output'                  -> prefixed with base
+//   'http://127.0.0.1:8188/view?filename=X.png&...'    -> used as-is
+const COMFYUI_BASE = 'http://127.0.0.1:8188';
+
+function buildDisplayUrl(path: string | null | undefined): string | null {
+  if (!path || !path.trim()) return null;
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  if (path.startsWith('/view')) return `${COMFYUI_BASE}${path}`;
+  return `${COMFYUI_BASE}/view?filename=${encodeURIComponent(path)}&type=output`;
+}
+
 export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }: StoryCharacterCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -63,7 +78,10 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
     || genProgress[imageKey]?.status === 'generating' || genProgress[imageKey]?.status === 'queued' || genProgress[imageKey]?.status === 'saving';
 
   const handleRegenerateIdentity = useCallback(() => {
-    // Clear all locked identity data so a fresh generation can occur
+    // Reset identity lock metadata to allow fresh generation.
+    // reference_image_path and reference_image_for_ipadapter are intentionally preserved.
+    // Clearing them sets hasReferenceImage=false in CharacterImageGenerator,
+    // which silently routes to pixar_disney_stable.json (no IPAdapter nodes 10-15).
     onUpdate({
       identityLocked: false,
       seed: null,
@@ -81,11 +99,12 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
         body_proportions: '',
         style_type: '',
       },
-      reference_image_path: null,
-      reference_image_for_ipadapter: null,
+      // reference_image_path: NOT cleared - needed for IPAdapter routing
+      // reference_image_for_ipadapter: NOT cleared - needed for LoadImage node 13
     });
-    console.log('[IDENTITY] Regenerate identity triggered for:', entry.name);
-  }, [entry.name, onUpdate]);
+    console.log('[IDENTITY] Regenerate triggered for:', entry.name);
+    console.log('[IDENTITY] reference_image_path preserved:', entry.reference_image_path);
+  }, [entry.name, entry.reference_image_path, onUpdate]);
 
     const handleGeneratePrompt = useCallback(() => {
     // If user typed manually, warn and skip — manual prompt takes priority
@@ -123,6 +142,7 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
   }, [entry, onUpdate, promptKey, genSetProgress, genResetProgress]);
 
   const handleGenerateImage = useCallback(async () => {
+    console.log('[GENERATE IMAGE] clicked — entry:', entry.name, '| genRunning:', genRunning, '| has ref:', !!entry.reference_image_path, '| identityLocked:', entry.identityLocked);
     genSetProgress(imageKey, { status: 'queued', progress: 10, label: 'Queuing image generation...' });
 
     try {
@@ -157,8 +177,11 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
         // Update entry with all fields returned from generator (includes locked metadata)
         const updatedEntry = result.entry;
         onUpdate({
-          reference_image_path: result.referenceImagePath,
-          reference_image_for_ipadapter: result.referenceImagePath,
+          // Patch: use normalized filename from updatedEntry (plain filename, not raw URL).
+          // result.referenceImagePath carries the raw ComfyUI URL which breaks LoadImage on next generation.
+          // updatedEntry.reference_image_path is already normalized by CharacterImageGenerator.
+          reference_image_path: updatedEntry.reference_image_path,
+          reference_image_for_ipadapter: updatedEntry.reference_image_for_ipadapter ?? updatedEntry.reference_image_path,
           identityLocked: updatedEntry.identityLocked,
           seed: updatedEntry.seed,
           workflow_path: updatedEntry.workflow_path,
@@ -227,7 +250,12 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
       >
         <div className="w-8 h-8 rounded-full bg-studio-800 flex items-center justify-center text-xs font-bold text-studio-400 shrink-0 overflow-hidden">
           {entry.reference_image_path ? (
-            <img src={entry.reference_image_path} alt={entry.name} className="w-full h-full object-cover rounded-full" />
+            <img
+              src={buildDisplayUrl(entry.reference_image_path) ?? undefined}
+              key={entry.reference_image_path ?? 'no-ref'}
+              alt={entry.name}
+              className="w-full h-full object-cover rounded-full"
+            />
           ) : (
             entry.name[0]
           )}
@@ -337,7 +365,8 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
               <label className="label text-[10px]">Reference Image</label>
               <div className="mt-1">
                 <img
-                  src={entry.reference_image_path}
+                  src={buildDisplayUrl(entry.reference_image_path) ?? undefined}
+                  key={entry.reference_image_path ?? 'no-ref'}
                   alt={entry.name}
                   className="w-20 h-20 object-cover rounded-lg border border-surface-border cursor-pointer hover:opacity-80 transition-opacity"
                   onClick={() => setLightboxOpen(true)}
@@ -362,14 +391,15 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
                   <X className="w-6 h-6" />
                 </button>
                 <img
-                  src={entry.reference_image_path}
+                  src={buildDisplayUrl(entry.reference_image_path) ?? undefined}
+                  key={entry.reference_image_path ?? 'no-ref-lightbox'}
                   alt={entry.name}
                   className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
                 />
                 <div className="mt-3 flex items-center gap-3">
                   <p className="text-sm text-white/70">{entry.name}</p>
                   <a
-                    href={entry.reference_image_path}
+                    href={buildDisplayUrl(entry.reference_image_path) ?? '#'}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-accent-600/30 text-accent-300 hover:bg-accent-600/50 transition-colors"
@@ -418,7 +448,7 @@ export function StoryCharacterCard({ entry, onUpdate, onDelete, stylePresetIds }
             </button>
                         <button
               type="button"
-              disabled={!entry.character_prompt || genRunning}
+              disabled={genRunning}
               onClick={handleGenerateImage}
               className="text-xs px-2.5 py-1.5 rounded-lg bg-surface-light text-studio-300 hover:bg-surface-border transition-colors flex items-center gap-1 disabled:opacity-40"
             >

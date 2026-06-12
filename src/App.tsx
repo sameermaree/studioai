@@ -16,6 +16,8 @@ import ComfyUIStudio from './pages/ComfyUIStudio';
 import ComfyUIAdvanced from './pages/ComfyUIAdvanced';
 import ComfyUIAssets from './pages/ComfyUIAssets';
 import TimelineEditorPage from './pages/TimelineEditor';
+import { TimelinePage } from './components/timeline/TimelinePage';
+import { EpisodeWorkspace } from './pages/EpisodeWorkspace';
 import { RenderPage } from './pages/RenderPage';
 
 export default function App() {
@@ -39,6 +41,8 @@ export default function App() {
             <Route path="comfyui/advanced" element={<ComfyUIAdvanced />} />
             <Route path="comfyui/assets" element={<ComfyUIAssets />} />
             <Route path="timeline/:timelineId" element={<TimelineEditorPage />} />
+            <Route path="episode-timeline/:episodeId" element={<TimelinePage />} />
+            <Route path="workspace/:episodeId" element={<EpisodeWorkspace />} />
             <Route path="render/:id" element={<RenderPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

@@ -1,161 +1,162 @@
-import { Film, Users, Sparkles, MonitorPlay, TrendingUp, Clock } from 'lucide-react';
+/**
+ * Dashboard.tsx — Simple production studio home.
+ * Three questions only: What am I working on? What's pending? What do I start?
+ */
+import { useNavigate } from 'react-router-dom';
+import { Film, Plus, Loader2, ChevronRight, Clock } from 'lucide-react';
 import { useStudioStore } from '../store/useStudioStore';
-import { useLanguage } from '../hooks/useLanguage';
-import { Link } from 'react-router-dom';
+import { useRenderQueueStore } from '../store/useRenderQueueStore';
+import { WorkflowStateBadge } from '../components/shared/WorkflowStateBadge';
+import { computeEpisodeWorkflowState, computeEpisodeStats } from '../lib/computeEpisodeState';
 
 export function Dashboard() {
-  const { characters, episodes, prompts, renderJobs } = useStudioStore();
-  const { t } = useLanguage();
+  const navigate = useNavigate();
+  const { episodes } = useStudioStore();
+  const productionJobs = useRenderQueueStore((s) => s.jobs);
 
-  // Filter out null/invalid episodes
-  const validEpisodes = episodes.filter((ep) => ep && ep.id && ep.title && ep.scenes);
-  const validRenderJobs = renderJobs.filter((j) => j && j.id && j.status);
+  const validEpisodes = episodes
+    .filter((ep) => ep?.id && ep?.title && ep?.scenes)
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
-  const activeRenders = validRenderJobs.filter((j) => j.status === 'rendering' || j.status === 'queued');
-  const completedRenders = validRenderJobs.filter((j) => j.status === 'completed');
-
-  const stats = [
-    { label: t.dashboard.characters, value: characters.length, icon: Users, color: 'text-accent-400', bg: 'bg-accent-900/20' },
-    { label: t.dashboard.episodes, value: validEpisodes.length, icon: Film, color: 'text-blue-400', bg: 'bg-blue-900/20' },
-    { label: t.dashboard.prompts, value: prompts.length, icon: Sparkles, color: 'text-amber-400', bg: 'bg-amber-900/20' },
-    { label: t.dashboard.activeRenders, value: activeRenders.length, icon: MonitorPlay, color: 'text-rose-400', bg: 'bg-rose-900/20' },
-  ];
+  const lastEpisode = validEpisodes[0];
+  const activeJobs = productionJobs.filter(
+    (j) => j.status === 'running' || j.status === 'queued'
+  );
 
   return (
-    <div className="space-y-8 animate-fade-in">
-      <div>
-        <h1 className="page-title">{t.dashboard.title}</h1>
-        <p className="page-subtitle">{t.dashboard.subtitle}</p>
-      </div>
+    <div className="max-w-2xl mx-auto space-y-8 animate-fade-in pt-4">
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat) => (
-          <div key={stat.label} className="card-hover">
+      {/* Continue last episode */}
+      {lastEpisode && (
+        <div>
+          <p className="text-xs text-studio-500 uppercase tracking-widest mb-3">Continue working</p>
+          <button
+            onClick={() => navigate(`/workspace/${lastEpisode.id}`)}
+            className="w-full text-left p-4 rounded-xl bg-accent-600/10 border border-accent-600/20
+              hover:bg-accent-600/15 hover:border-accent-600/30 transition-all group"
+          >
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-studio-400">{stat.label}</p>
-                <p className="text-3xl font-bold text-white mt-1">{stat.value}</p>
+                <p className="text-base font-semibold text-white">{lastEpisode.title}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <WorkflowStateBadge
+                    state={computeEpisodeWorkflowState(lastEpisode, productionJobs)}
+                    size="sm"
+                  />
+                  <span className="text-xs text-studio-500">
+                    {lastEpisode.scenes.length} scenes ·{' '}
+                    {timeAgo(lastEpisode.updated_at)}
+                  </span>
+                </div>
               </div>
-              <div className={`w-12 h-12 rounded-xl ${stat.bg} flex items-center justify-center`}>
-                <stat.icon className={`w-6 h-6 ${stat.color}`} />
-              </div>
+              <ChevronRight className="w-5 h-5 text-studio-500 group-hover:text-accent-400 transition-colors" />
             </div>
-          </div>
-        ))}
-      </div>
+          </button>
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">{t.dashboard.recentEpisodes}</h2>
-            <Link to="/episodes" className="text-sm text-accent-400 hover:text-accent-300 transition-colors">
-              {t.dashboard.viewAll}
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {validEpisodes.slice(0, 3).map((ep) => (
-              <div key={ep.id} className="flex items-center gap-4 p-3 rounded-lg bg-surface hover:bg-surface-lighter transition-colors">
-                <div className="w-16 h-10 rounded-md bg-studio-800 overflow-hidden shrink-0">
-                  {ep.thumbnail_url && (
-                    <img src={ep.thumbnail_url} alt={ep.title || 'Episode'} className="w-full h-full object-cover" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-white truncate">{ep.title || 'Untitled Episode'}</p>
-                  <p className="text-xs text-studio-400">
-                    {ep.scenes?.length || 0} {t.episodes.scenes.toLowerCase()}
-                  </p>
-                </div>
-                <StatusBadge status={ep.status} />
-              </div>
-            ))}
-            {validEpisodes.length === 0 && (
-              <p className="text-sm text-studio-500 text-center py-4">{t.episodes.noEpisodes}</p>
+      {/* Active render jobs */}
+      {activeJobs.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-900/10 border border-amber-700/20">
+          <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-amber-300 font-medium">
+              {activeJobs.length} job{activeJobs.length > 1 ? 's' : ''} running
+            </p>
+            {activeJobs[0] && (
+              <p className="text-xs text-amber-500 truncate">
+                {activeJobs[0].type} · scene {activeJobs[0].scene_id?.slice(0, 8)}
+              </p>
             )}
           </div>
+          {activeJobs[0]?.progress > 0 && (
+            <span className="text-xs text-amber-400 font-mono">{activeJobs[0].progress}%</span>
+          )}
+        </div>
+      )}
+
+      {/* Episodes list */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs text-studio-500 uppercase tracking-widest">Episodes</p>
+          <button
+            onClick={() => navigate('/episodes')}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
+              bg-accent-600 text-white hover:bg-accent-500 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            New Episode
+          </button>
         </div>
 
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">{t.dashboard.renderQueue}</h2>
-            <Link to="/rendering" className="text-sm text-accent-400 hover:text-accent-300 transition-colors">
-              {t.dashboard.viewAll}
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {renderJobs.slice(0, 4).map((job) => (
-              <div key={job.id} className="flex items-center gap-4 p-3 rounded-lg bg-surface">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  job.status === 'rendering' ? 'bg-accent-900/20' : 'bg-studio-800'
-                }`}>
-                  {job.status === 'rendering' ? (
-                    <TrendingUp className="w-5 h-5 text-accent-400" />
-                  ) : (
-                    <Clock className="w-5 h-5 text-studio-500" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-white">
-                    {job.type === 'episode' ? t.dashboard.episodeStitch : t.dashboard.sceneRender}
-                  </p>
-                  <div className="mt-1 h-1.5 w-full bg-studio-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-accent-500 rounded-full transition-all duration-500"
-                      style={{ width: `${job.progress}%` }}
-                    />
+        <div className="space-y-2">
+          {validEpisodes.length === 0 ? (
+            <div className="text-center py-12">
+              <Film className="w-10 h-10 text-studio-700 mx-auto mb-3" />
+              <p className="text-studio-500 text-sm">No episodes yet.</p>
+              <button
+                onClick={() => navigate('/episodes')}
+                className="mt-3 text-sm text-accent-400 hover:text-accent-300 transition-colors"
+              >
+                Create your first episode →
+              </button>
+            </div>
+          ) : (
+            validEpisodes.map((ep) => {
+              const state = computeEpisodeWorkflowState(ep, productionJobs);
+              const stats = computeEpisodeStats(ep, productionJobs);
+              return (
+                <button
+                  key={ep.id}
+                  onClick={() => navigate(`/workspace/${ep.id}`)}
+                  className="w-full text-left flex items-center gap-4 px-4 py-3 rounded-lg
+                    bg-studio-900 border border-studio-800 hover:border-studio-600
+                    hover:bg-studio-800/50 transition-all group"
+                >
+                  {/* Mini image or placeholder */}
+                  <div className="w-12 h-8 rounded bg-studio-800 shrink-0 overflow-hidden">
+                    {ep.scenes.find((s) => s.render_url) ? (
+                      <img
+                        src={`http://127.0.0.1:8188/view?filename=${encodeURIComponent(
+                          ep.scenes.find((s) => s.render_url)!.render_url!
+                        )}&type=output`}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Film className="w-4 h-4 text-studio-600" />
+                      </div>
+                    )}
                   </div>
-                </div>
-                <span className="text-xs text-studio-400 font-mono">{job.progress}%</span>
-              </div>
-            ))}
-            {renderJobs.length === 0 && (
-              <p className="text-sm text-studio-500 text-center py-4">{t.rendering.noJobs}</p>
-            )}
-          </div>
-        </div>
-      </div>
 
-      <div className="card">
-        <h2 className="text-lg font-semibold text-white mb-4">{t.dashboard.productionStats}</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="text-center p-4 rounded-lg bg-surface">
-            <p className="text-2xl font-bold text-accent-400">{completedRenders.length}</p>
-            <p className="text-xs text-studio-400 mt-1">{t.dashboard.rendersComplete}</p>
-          </div>
-          <div className="text-center p-4 rounded-lg bg-surface">
-            <p className="text-2xl font-bold text-blue-400">
-              {validEpisodes.reduce((sum, ep) => sum + (ep.scenes?.length || 0), 0)}
-            </p>
-            <p className="text-xs text-studio-400 mt-1">{t.dashboard.totalScenes}</p>
-          </div>
-          <div className="text-center p-4 rounded-lg bg-surface">
-            <p className="text-2xl font-bold text-amber-400">
-              {validEpisodes.reduce((sum, ep) => sum + (ep.duration_estimate ?? 0), 0)}s
-            </p>
-            <p className="text-xs text-studio-400 mt-1">{t.dashboard.totalDuration}</p>
-          </div>
-          <div className="text-center p-4 rounded-lg bg-surface">
-            <p className="text-2xl font-bold text-emerald-400">{prompts.filter((p) => p.is_preset).length}</p>
-            <p className="text-xs text-studio-400 mt-1">{t.dashboard.promptPresets}</p>
-          </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{ep.title}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <WorkflowStateBadge state={state} size="sm" />
+                      <span className="text-xs text-studio-600">
+                        {stats.scenes_with_image}/{stats.total_scenes} images
+                      </span>
+                    </div>
+                  </div>
+
+                  <ChevronRight className="w-4 h-4 text-studio-600 group-hover:text-studio-400 transition-colors shrink-0" />
+                </button>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    draft: 'bg-studio-800 text-studio-400 border-studio-700',
-    in_production: 'bg-blue-900/30 text-blue-400 border-blue-700/30',
-    rendering: 'bg-amber-900/30 text-amber-400 border-amber-700/30',
-    rendered: 'bg-accent-900/30 text-accent-400 border-accent-700/30',
-    published: 'bg-emerald-900/30 text-emerald-400 border-emerald-700/30',
-  };
-
-  return (
-    <span className={`badge border ${styles[status] ?? styles.draft}`}>
-      {status.replace('_', ' ')}
-    </span>
-  );
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }

@@ -1,18 +1,164 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { cinematicPresets } from '../config/presets/cinematicPresets';
 import { voicePresets } from '../config/presets/voicePresets';
-import { Plus, Lock, Unlock, Tag, Trash2, CreditCard as Edit2, X, Image, Mic2, Palette } from 'lucide-react';
+import { Plus, Lock, Unlock, Tag, Trash2, CreditCard as Edit2, X, Image, Mic2, Palette, Sparkles, Loader2, CheckCircle2, AlertCircle, ZoomIn, Download } from 'lucide-react';
 import { useStudioStore } from '../store/useStudioStore';
+import { buildMediaUrl, normalizeImageFilename } from '../lib/buildMediaUrl';
+// Character type utilities — inline to avoid missing module dependency
+const _NON_HUMAN = new Set(['animal','bird','crow','cat','dog','rabbit','duck',
+  'fox','wolf','horse','owl','eagle','creature','dragon','magical creature',
+  'monster','fairy','spirit']);
+const isNonHumanType = (t: string) => _NON_HUMAN.has(t.toLowerCase());
+import { generateCharacterImage } from '../services/generation/CharacterImageGenerator';
+import type { CharacterBibleEntry, CharacterAppearanceTraits } from '../types';
 import { useLanguage } from '../hooks/useLanguage';
 import type { Character, Outfit, ConsistencySettings } from '../types';
 
+// Convert store Character → minimal CharacterBibleEntry for generateCharacterImage()
+function characterToBibleEntry(char: Character): CharacterBibleEntry {
+  const meta = (char.metadata || {}) as Record<string, string>;
+  const traits: CharacterAppearanceTraits = {
+    hairstyle: meta.hair || char.cinematic_notes || '',
+    hair_color: meta.hair || '',
+    eye_color: meta.eyes || '',
+    outfit: char.outfits?.[0]?.name || meta.outfit || '',
+    age_range: 'unknown',
+    facial_structure: char.description || '',
+    body_proportions: '',
+    style_type: meta.visual_style || 'Pixar-style 3D animated',
+  };
+  return {
+    id: char.id,
+    name: char.name,
+    role: 'character',
+    character_type: meta.character_type || 'character',
+    age: 0,
+    gender: (meta.gender as CharacterBibleEntry['gender']) || 'unknown',
+    visual_description: char.description || '',
+    outfit: char.outfits?.[0]?.name || meta.outfit || '',
+    hair: meta.hair || char.cinematic_notes || '',
+    eyes: meta.eyes || '',
+    personality: char.personality_notes || '',
+    art_style: meta.visual_style || 'Pixar-style 3D animated',
+    character_prompt: '',
+    character_prompt_manual: false,
+    scene_injection_prompt: '',
+    negative_prompt: '',
+    // Only use reference image for IPAdapter when identity is truly locked
+    // When regenerating, we want a fresh result — no IPAdapter constraint
+    reference_image_path: char.consistency_lock
+      ? (normalizeImageFilename(
+          (meta.reference_image_path as string) || char.image_url
+        ) || null)
+      : null,
+    seed: null,   // always null → always new seed for Generate/Regenerate
+    identityLocked: char.consistency_lock,
+    workflow_path: null,
+    checkpoint: null,
+    generation_positive_prompt: null,
+    generation_negative_prompt: null,
+    style_preset_ids: char.style_preset_id ? [char.style_preset_id] : [],
+    appearance_traits: traits,
+    reference_image_for_ipadapter: char.consistency_lock
+      ? (normalizeImageFilename(meta.reference_image_for_ipadapter as string || char.image_url) || null)
+      : null,
+    created_at: char.created_at,
+    updated_at: char.updated_at,
+  };
+}
+
 export function Characters() {
   const { characters, addCharacter, updateCharacter, deleteCharacter, voices, stylePresets } = useStudioStore();
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const [lightboxChar, setLightboxChar] = useState<Character | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+
+  // ESC to close lightbox
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && lightboxChar) {
+        console.log('[LIGHTBOX] close via ESC');
+        setLightboxChar(null); setZoom(1); setPanX(0); setPanY(0);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [lightboxChar]);
+
+  const closeLightbox = useCallback(() => {
+    console.log('[LIGHTBOX] close');
+    setLightboxChar(null); setZoom(1); setPanX(0); setPanY(0);
+  }, []);
+
+  const openLightbox = useCallback((char: Character) => {
+    console.log('[LIGHTBOX] open | image =', char.image_url);
+    setLightboxChar(char); setZoom(1); setPanX(0); setPanY(0);
+  }, []);
+  const [generateErrors, setGenerateErrors] = useState<Record<string, string>>({});
   const { t } = useLanguage();
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const handleGenerateIdentity = async (char: Character) => {
+    setGeneratingId(char.id);
+    setGenerateErrors(prev => ({ ...prev, [char.id]: '' }));
+    try {
+      const entry = characterToBibleEntry(char);
+      console.log('[REGENERATE] character:', char.name);
+      console.log('[REGENERATE] consistency_lock:', char.consistency_lock);
+      console.log('[REGENERATE] entry.seed:', entry.seed, '(null = new seed will be generated)');
+      console.log('[REGENERATE] entry.reference_image_path:', entry.reference_image_path);
+      console.log('[REGENERATE] entry.identityLocked:', entry.identityLocked);
+      const result = await generateCharacterImage(entry, undefined,
+        char.style_preset_id ? [char.style_preset_id] : []);
+
+      if (result.success && result.referenceImagePath) {
+        const u = result.entry;
+        // Always normalize to filename — never store full URL
+        const filename = normalizeImageFilename(result.referenceImagePath)
+          || normalizeImageFilename(u.reference_image_path)
+          || result.referenceImagePath;
+        console.log('[IMAGE URL RAW]', result.referenceImagePath);
+        console.log('[IMAGE URL NORMALIZED]', filename);
+        console.log('[IPADAPTER REFERENCE]', u.reference_image_for_ipadapter);
+        // Save image but do NOT lock — user must click Use As Identity
+        updateCharacter(char.id, {
+          image_url: filename,
+          consistency_lock: false,   // never auto-lock
+          metadata: {
+            ...((char.metadata as Record<string, unknown>) || {}),
+            reference_image_for_ipadapter: normalizeImageFilename(u.reference_image_for_ipadapter),
+            reference_image_path: filename,
+            identity_generated_at: new Date().toISOString(),
+            identity_locked: false,
+            appearance_traits: u.appearance_traits,
+            seed: u.seed,
+            generation_positive_prompt: u.generation_positive_prompt,
+          },
+        });
+      } else {
+        setGenerateErrors(prev => ({ ...prev, [char.id]: result.error || 'Generation failed' }));
+      }
+    } catch (e: any) {
+      setGenerateErrors(prev => ({ ...prev, [char.id]: e.message || 'Error' }));
+    } finally {
+      setGeneratingId(null);
+    }
+  };
+
+  const handleLockIdentity = (char: Character) => {
+    const meta = (char.metadata as Record<string, unknown>) || {};
+    updateCharacter(char.id, {
+      consistency_lock: true,
+      metadata: { ...meta, identity_locked: true },
+    });
+  };
+
   return (
+    <>
     <div className="space-y-6 animate-fade-in">
       <div className="section-header">
         <div>
@@ -39,12 +185,21 @@ export function Characters() {
               onEdit={() => setEditingId(char.id)}
               onToggleLock={() => updateCharacter(char.id, { consistency_lock: !char.consistency_lock })}
               onDelete={() => deleteCharacter(char.id)}
+              isGenerating={generatingId === char.id}
+              generateError={generateErrors[char.id] || ''}
+              onGenerate={() => handleGenerateIdentity(char)}
+              onLockIdentity={() => handleLockIdentity(char)}
+              onOpenLightbox={() => char.image_url && openLightbox(char)}
+              onLoraUpdate={(updates) => {
+                const current = char.lora ?? { status: 'none', filename: null, trigger_word: null, weight: 0.8 };
+                updateCharacter(char.id, { lora: { ...current, ...updates } });
+              }}
             />
           ))}
         </div>
       )}
 
-      {(showCreate || editingId) && (
+            {(showCreate || editingId) && (
         <CharacterModal
           character={editingId ? characters.find((c) => c.id === editingId) : undefined}
           voices={voices}
@@ -69,6 +224,84 @@ export function Characters() {
         />
       )}
     </div>
+
+    {/* LIGHTBOX — rendered via portal to avoid z-index and overflow issues */}
+    {lightboxChar && createPortal(
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.92)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', padding: '16px' }}
+        onClick={closeLightbox}
+      >
+        <div
+          style={{ width: '100%', maxWidth: '900px', position: 'relative' }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Toolbar */}
+          <div style={{ display: 'flex', alignItems: 'center',
+            justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <p style={{ color: 'white', fontWeight: 600, margin: 0 }}>{lightboxChar.name}</p>
+              <p style={{ color: '#888', fontSize: '11px', fontFamily: 'monospace', margin: 0 }}>
+                {normalizeImageFilename(lightboxChar.image_url)}
+              </p>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {/* Zoom */}
+              <button onClick={() => { const z = Math.max(0.5, zoom - 0.25); setZoom(z); console.log('[LIGHTBOX] zoom=', z); }}
+                disabled={zoom <= 0.5}
+                style={{ padding: '4px 10px', background: '#333', color: 'white',
+                  border: '1px solid #555', borderRadius: '6px', cursor: 'pointer' }}>−</button>
+              <span style={{ color: '#aaa', fontSize: '12px', minWidth: '40px', textAlign: 'center' }}>
+                {Math.round(zoom * 100)}%
+              </span>
+              <button onClick={() => { const z = Math.min(4, zoom + 0.25); setZoom(z); console.log('[LIGHTBOX] zoom=', z); }}
+                disabled={zoom >= 4}
+                style={{ padding: '4px 10px', background: '#333', color: 'white',
+                  border: '1px solid #555', borderRadius: '6px', cursor: 'pointer' }}>+</button>
+              <button onClick={() => { setZoom(1); console.log('[LIGHTBOX] zoom= 1'); }}
+                style={{ padding: '4px 8px', background: 'transparent', color: '#888',
+                  border: '1px solid #444', borderRadius: '6px', cursor: 'pointer' }}>1:1</button>
+              {/* Download */}
+              <a href={buildMediaUrl(lightboxChar.image_url) ?? '#'}
+                download={lightboxChar.name + '.png'}
+                style={{ padding: '4px 10px', background: '#333', color: 'white',
+                  border: '1px solid #555', borderRadius: '6px', textDecoration: 'none',
+                  fontSize: '12px' }}>
+                ⬇ Download
+              </a>
+              {/* Use As Identity */}
+              {!lightboxChar.consistency_lock && (
+                <button
+                  onClick={() => { handleLockIdentity(lightboxChar); closeLightbox(); }}
+                  style={{ padding: '4px 10px', background: 'rgba(16,185,129,0.15)',
+                    color: '#34d399', border: '1px solid rgba(16,185,129,0.3)',
+                    borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}
+                >✓ Use As Identity</button>
+              )}
+              {/* Close */}
+              <button onClick={closeLightbox}
+                style={{ padding: '4px 10px', background: 'transparent', color: '#aaa',
+                  border: '1px solid #555', borderRadius: '6px', cursor: 'pointer',
+                  fontSize: '16px' }}>✕</button>
+            </div>
+          </div>
+          {/* Image — scrollable when zoomed */}
+          <div style={{ overflow: 'auto', maxHeight: '82vh', borderRadius: '8px',
+            background: 'rgba(0,0,0,0.3)', textAlign: 'center' }}>
+            <img
+              src={buildMediaUrl(lightboxChar.image_url) ?? ''}
+              alt={lightboxChar.name}
+              style={{ width: zoom === 1 ? '100%' : `${zoom * 100}%`,
+                maxWidth: zoom === 1 ? '100%' : 'none',
+                display: 'block', transition: 'width 0.15s ease' }}
+            />
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   );
 }
 
@@ -78,21 +311,40 @@ function CharacterCard({
   onEdit,
   onToggleLock,
   onDelete,
+  isGenerating = false,
+  generateError = '',
+  onGenerate,
+  onLockIdentity,
+  onOpenLightbox,
+  onLoraUpdate,
 }: {
   character: Character;
   voice?: { name: string; language: string };
   onEdit: () => void;
   onToggleLock: () => void;
   onDelete: () => void;
+  isGenerating?: boolean;
+  generateError?: string;
+  onGenerate?: () => void;
+  onLockIdentity?: () => void;
+  onOpenLightbox?: () => void;
+  onLoraUpdate?: (updates: { filename?: string|null; trigger_word?: string|null; weight?: number; status?: 'none'|'active' }) => void;
 }) {
   const { t } = useLanguage();
 
   return (
     <div className="card-hover group">
       <div className="flex items-start gap-4">
-        <div className="w-16 h-16 rounded-xl bg-studio-800 overflow-hidden shrink-0">
+        <div
+          onClick={() => character.image_url && onOpenLightbox?.()}
+          className="w-16 h-16 rounded-xl bg-studio-800 overflow-hidden shrink-0 cursor-pointer hover:ring-2 hover:ring-accent-500 transition-all"
+          title={character.image_url ? 'Click to view' : ''}
+        >
           {character.image_url ? (
-            <img src={character.image_url} alt={character.name} className="w-full h-full object-cover" />
+            <img src={buildMediaUrl(character.image_url) ?? ''}
+              alt={character.name} className="w-full h-full object-cover"
+              onError={e => { console.warn('[IMAGE RENDER] 404 for:', character.image_url); }}
+            />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-studio-600 text-xl font-bold">
               {character.name[0]}
@@ -178,13 +430,104 @@ function CharacterCard({
         </div>
       )}
 
-      <div className="mt-4 pt-3 border-t border-surface-border flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button onClick={onEdit} className="p-1.5 rounded-md hover:bg-surface-lighter text-studio-400 hover:text-white transition-colors">
-          <Edit2 className="w-4 h-4" />
+      {/* Identity status */}
+      <div className="mt-3 flex items-center gap-2 min-h-[20px]">
+        {isGenerating ? (
+          <span className="flex items-center gap-1.5 text-xs text-amber-400">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating identity...
+          </span>
+        ) : character.image_url ? (
+          <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            {character.consistency_lock ? 'Identity Locked' : 'Identity Ready'}
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-xs text-red-400">
+            <AlertCircle className="w-3.5 h-3.5" /> No Identity Image
+          </span>
+        )}
+        {generateError && (
+          <span className="text-xs text-red-400 truncate ml-2" title={generateError}>
+            {generateError.slice(0, 35)}
+          </span>
+        )}
+      </div>
+
+      {/* Action row */}
+      <div className="mt-3 pt-3 border-t border-surface-border flex flex-wrap items-center gap-2">
+        <button
+          onClick={onGenerate}
+          disabled={isGenerating}
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg
+            bg-accent-600/15 text-accent-400 border border-accent-700/30
+            hover:bg-accent-600/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {isGenerating
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : <Sparkles className="w-3.5 h-3.5" />
+          }
+          {isGenerating ? 'Generating...' : character.image_url ? 'Regenerate' : 'Generate'}
         </button>
-        <button onClick={onDelete} className="p-1.5 rounded-md hover:bg-danger-900/30 text-studio-400 hover:text-danger-400 transition-colors">
-          <Trash2 className="w-4 h-4" />
-        </button>
+        {character.image_url && !character.consistency_lock && (
+          <button
+            onClick={onLockIdentity}
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg
+              bg-emerald-900/20 text-emerald-400 border border-emerald-700/30
+              hover:bg-emerald-900/30 transition-colors"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" /> Use As Identity
+          </button>
+        )}
+        {character.consistency_lock && (
+          <span className="flex items-center gap-1 text-xs text-emerald-400">
+            <Lock className="w-3 h-3" /> Locked
+          </span>
+        )}
+        <div className="flex-1" />
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={onEdit}
+            className="p-1.5 rounded-md hover:bg-surface-lighter text-studio-400 hover:text-white transition-colors">
+            <Edit2 className="w-4 h-4" />
+          </button>
+          <button onClick={onDelete}
+            className="p-1.5 rounded-md hover:bg-danger-900/30 text-studio-400 hover:text-danger-400 transition-colors">
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+
+      {/* LoRA Config */}
+      <div className="mt-2 pt-2 border-t border-studio-800/40 space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-studio-600">⚡ LoRA</span>
+          {character.lora?.status === 'active' && (
+            <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-900/30
+              text-purple-400 border border-purple-700/30">
+              {character.lora.trigger_word ?? character.lora.filename}
+            </span>
+          )}
+        </div>
+        <input className="input text-xs py-1 w-full" placeholder="filename.safetensors"
+          defaultValue={character.lora?.filename ?? ''}
+          onBlur={e => onLoraUpdate?.({ filename: e.target.value.trim() || null })} />
+        <input className="input text-xs py-1 w-full" placeholder="trigger word"
+          defaultValue={character.lora?.trigger_word ?? ''}
+          onBlur={e => onLoraUpdate?.({ trigger_word: e.target.value.trim() || null })} />
+        <div className="flex gap-2 items-center">
+          <input type="number" min={0.1} max={1.5} step={0.05}
+            className="input text-xs py-1 w-20" placeholder="weight"
+            defaultValue={character.lora?.weight ?? 0.8}
+            onBlur={e => onLoraUpdate?.({ weight: Number(e.target.value) })} />
+          <button
+            onClick={() => onLoraUpdate?.({ status: character.lora?.status === 'active' ? 'none' : 'active' })}
+            className={`text-xs px-2 py-1 rounded-lg border transition-colors ${
+              character.lora?.status === 'active'
+                ? 'bg-purple-900/30 text-purple-400 border-purple-700/30'
+                : 'text-studio-500 border-studio-700 hover:text-purple-400 hover:border-purple-700/50'
+            }`}>
+            {character.lora?.status === 'active' ? '⚡ Active' : 'Enable LoRA'}
+          </button>
+        </div>
+      </div>
       </div>
     </div>
   );

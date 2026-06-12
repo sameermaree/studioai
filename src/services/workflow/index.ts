@@ -9,6 +9,7 @@ import type {
   RenderSettings,
   StylePreset,
   Character,
+  CharacterBibleEntry,
 } from '../../types';
 
 // Import Ollama service
@@ -120,10 +121,20 @@ function resolutionFromAspectRatio(ratio: string): string {
  * - pacing and transitions
  */
 export async function generateEpisodeWorkflow(
-  config: EpisodeWorkflowConfig,
+  config: EpisodeWorkflowConfig & { story_characters?: CharacterBibleEntry[] },
   stylePresets: StylePreset[],
   characters: Character[]
 ): Promise<WorkflowResult> {
+  // Resolve which IDs go into scene.characters[].
+  // If story_characters (CharacterBibleEntry[]) are available, use their IDs —
+  // this ensures new scenes carry CharacterBibleEntry.id values, making Phase 4
+  // (ScenePromptComposer migration) safe.
+  // Otherwise fall back to config.character_ids (legacy store.characters IDs).
+  const resolvedCharacterIds: string[] =
+    config.story_characters && config.story_characters.length > 0
+      ? config.story_characters.map((e) => e.id)
+      : config.character_ids;
+
   try {
     // Use the enhanced workflow orchestrator
     console.log('Using enhanced workflow orchestrator...');
@@ -150,7 +161,7 @@ export async function generateEpisodeWorkflow(
       // If Ollama fails or returns invalid/empty result, fall back to local generation
       if (!ollamaResult || !Array.isArray(ollamaResult.scenes) || ollamaResult.scenes.length === 0) {
         console.log('Ollama returned invalid or empty result, falling back to local generation');
-        return generateLocalWorkflow(config, stylePresets, characters);
+        return generateLocalWorkflow(config, stylePresets, characters, resolvedCharacterIds);
       }
 
       // Process Ollama-generated scenes into proper format
@@ -170,7 +181,7 @@ export async function generateEpisodeWorkflow(
           negative_prompt: ollamaScene.negative_prompt,
           camera_angle: ollamaScene.camera_angle || 'Medium shot',
           motion_instructions: ollamaScene.motion_instructions || 'Slow dolly',
-          characters: config.character_ids,
+          characters: resolvedCharacterIds,
           character_outfits: {},
           style_preset_id: config.style_preset_id || null,
           voice_id: null,
@@ -312,7 +323,7 @@ export async function generateEpisodeWorkflow(
       // If Ollama integration fails, fall back to local generation
       console.error('All AI-based generation failed:', innerError);
       console.log('Falling back to local workflow generation');
-      return generateLocalWorkflow(config, stylePresets, characters);
+      return generateLocalWorkflow(config, stylePresets, characters, resolvedCharacterIds);
     }
   }
 }
@@ -321,9 +332,10 @@ export async function generateEpisodeWorkflow(
  * Local fallback workflow generation (no AI)
  */
 function generateLocalWorkflow(
-  config: EpisodeWorkflowConfig,
+  config: EpisodeWorkflowConfig & { story_characters?: CharacterBibleEntry[] },
   stylePresets: StylePreset[],
-  characters: Character[]
+  characters: Character[],
+  resolvedCharacterIds: string[]
 ): WorkflowResult {
   const now = new Date().toISOString();
   const episodeId = crypto.randomUUID();
@@ -362,7 +374,7 @@ function generateLocalWorkflow(
         config.camera_style === 'cinematic' ? 'Wide shot' : 'Medium shot',
       motion_instructions:
         config.camera_style === 'dynamic' ? 'Dynamic tracking shot' : 'Slow dolly',
-      characters: config.character_ids,
+      characters: resolvedCharacterIds,
       character_outfits: {},
       style_preset_id: config.style_preset_id || null,
       voice_id: null,
@@ -392,6 +404,7 @@ function generateLocalWorkflow(
     duration_estimate: scenes.reduce((sum, scene) => sum + scene.duration, 0),
     style_preset_id: config.style_preset_id || null,
     workflow_config: config,
+    story_characters: config.story_characters || [],
     created_at: now,
     updated_at: now,
   };

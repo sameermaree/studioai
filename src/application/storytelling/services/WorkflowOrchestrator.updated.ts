@@ -210,11 +210,17 @@ export class WorkflowOrchestrator {
     characters: Character[]
   ): Promise<Story> {
     console.log(`Generating story from config... Requested scenes: ${config.estimated_scenes}`);
-    // Map characters to the ones specified in the config
-    const selectedCharacters = characters.filter(char => 
-      config.character_ids.includes(char.id)
-    );
-    
+    // Prefer CharacterBibleEntry (story_characters) when available.
+    // Their IDs flow into scene.characters and match ScenePromptComposer lookups.
+    const storyChars = (config as any).story_characters;
+    const selectedCharacters = storyChars?.length
+      ? storyChars
+      : characters.filter((char: any) => config.character_ids.includes(char.id));
+    const charSource = storyChars?.length ? 'story_characters (BibleEntry)' : 'legacy store.characters';
+    console.log('[ORCHESTRATOR CHAR SOURCE]', charSource);
+    console.log('[ORCHESTRATOR CHAR IDS]', selectedCharacters.map((c: any) => c.id));
+    console.log('[ORCHESTRATOR CHAR NAMES]', selectedCharacters.map((c: any) => c.name));
+
     try {
       // Generate the story
       const story = await this.storyGenerator.generateStory(config.story, {
@@ -225,7 +231,7 @@ export class WorkflowOrchestrator {
         consistencyStrength: config.consistency_strength,
         aspectRatio: config.aspect_ratio,
         musicMood: config.music_mood,
-        characters: selectedCharacters,
+        characters: selectedCharacters as any,
         estimatedSceneCount: config.estimated_scenes,
         durationSeconds: config.duration_seconds,
       });

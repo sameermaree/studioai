@@ -59,13 +59,23 @@ export function cleanPromptForSDXL(raw: string): string {
   cleaned = cleaned.replace(/---.*?---/g, '').replace(/Characters?:/g, '');
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   cleaned = cleaned.replace(/^[,\s]+/, '').replace(/[,\s]+$/, '');
-  // Deduplicate words (case-insensitive, skip short words)
+  // Fix 4: deduplicate words, but never remove critical identity tokens.
+  // Tokens like 'bald', 'beard', 'suit' must survive even if they appear twice.
+  const IDENTITY_PROTECTED = new Set([
+    'bald', 'beard', 'mustache', 'glasses', 'scar', 'tattoo', 'suit',
+    'hijab', 'turban', 'freckles', 'eyebrows', 'wrinkles', 'uniform',
+    'jacket', 'overshirt', 'stubble', 'goatee', 'mohawk', 'dreadlocks',
+  ]);
   const words = cleaned.split(/\s+/);
   const unique: string[] = [];
   const seen = new Set<string>();
   for (const w of words) {
     const lower = w.toLowerCase().replace(/[^a-z]/g, '');
-    if (lower.length < 3 || !seen.has(lower)) { unique.push(w); if (lower.length >= 3) seen.add(lower); }
+    const isProtected = IDENTITY_PROTECTED.has(lower);
+    if (isProtected || lower.length < 3 || !seen.has(lower)) {
+      unique.push(w);
+      if (lower.length >= 3 && !isProtected) seen.add(lower);
+    }
   }
   return unique.slice(0, 200).join(' ');
 }
@@ -274,12 +284,14 @@ export function injectCharacterConsistency(
   const combinedNegative = [...new Set(charNegatives.flatMap(n => n.split(', ').map(s => s.trim())))].join(', ');
 
   // Build English-only character visual summary
+  // Patch A: style removed from scene augment.
+  // Style is carried by buildCharacterConsistencyPrompt only.
+  // Adding style here caused triple Pixar/Disney injection per scene.
   const sceneAugmentParts = characters.map((ch, i) => {
     const gender = detectGender(ch);
     const prefix = gender === 'male' ? 'male character' : gender === 'female' ? 'female character' : 'character';
     const desc = ch.description ? cleanPromptForSDXL(ch.description) : '';
-    const style = ch.style_preset_id ? getStyleKeywords(ch.style_preset_id) : '';
-    return `${prefix}: ${desc}${style ? ', ' + style : ''}`;
+    return `${prefix}: ${desc}`;
   });
   const sceneAugment = sceneAugmentParts.join('; ');
 
@@ -423,30 +435,71 @@ import type { CharacterBibleEntry } from '../../types';
  * Output: clean, full-body or half-body portrait, neutral pose, simple background.
  */
 export function buildCharacterPortraitPrompt(entry: CharacterBibleEntry, styleFamily?: string): string {
-  const genderLabel = entry.gender === 'male' ? 'male' : entry.gender === 'female' ? 'female' : 'person';
+  // Patch A-1: normalize gender before building prompt.
+  // LLM extraction may return 'man'/'boy' instead of canonical 'male'.
+  const rawGender = (entry.gender || '').toLowerCase();
+  const resolvedGender =
+    ['male', 'man', 'boy', 'masculine'].includes(rawGender) ? 'male' :
+    ['female', 'woman', 'girl', 'feminine'].includes(rawGender) ? 'female' : 'person';
+
+  // Fix 2: age-aware gender anchor — adult male must not say 'boy', adult female must not say 'girl'.
+  const isAdultChar = entry.age >= 18;
+  const genderAnchor =
+    resolvedGender === 'male'
+      ? isAdultChar
+        ? 'male character, man, masculine, adult male face, adult male features'
+        : 'male character, boy, masculine, child face, child facial features'
+      : resolvedGender === 'female'
+        ? isAdultChar
+          ? 'female character, woman, feminine, adult female face, adult female features'
+          : 'female character, girl, feminine, child face, child facial features'
+        : 'person';
+
   const ageLabel = entry.age > 0 ? `${entry.age} year old` : '';
+  // Phase 1: trait hierarchy reorder.
+  // SDXL weights tokens by position. Order: gender+age, hair+eyes, description, outfit, style, prompt.
+  // Before: outfit before hair/eyes; art_style immediately after eyes.
+  // After:  [1] gender+age  [2] hair+eyes  [3] description  [4] outfit  [5] style  [6] prompt
   const parts: string[] = [
-    // Core identity
-    `${genderLabel} character${ageLabel ? `, ${ageLabel}` : ''}`,
-    entry.visual_description,
-    entry.outfit ? `wearing ${entry.outfit}` : '',
+    // [1] Gender + age + character_type anchor (highest positional weight)
+    // character_type ('teenager', 'boy', 'child') resists Pixar softening toward generic child.
+    `${genderAnchor}${ageLabel ? `, ${ageLabel}` : ''}${entry.character_type ? `, ${entry.character_type}` : ''}`,
+    // [2a] Structured face traits from appearance_traits (locked fields, highest specificity)
+    entry.appearance_traits?.hairstyle ? entry.appearance_traits.hairstyle + ' hair' : '',
+    entry.appearance_traits?.hair_color ? entry.appearance_traits.hair_color + ' hair color' : '',
+    entry.appearance_traits?.eye_color ? entry.appearance_traits.eye_color + ' eyes' : '',
+    entry.appearance_traits?.facial_structure ? entry.appearance_traits.facial_structure : '',
+    entry.appearance_traits?.age_range ? entry.appearance_traits.age_range : '',
+    // [2b] Top-level face traits (fallback when appearance_traits empty)
     entry.hair ? `${entry.hair} hair` : '',
     entry.eyes ? `${entry.eyes} eyes` : '',
+    // [3] General visual description
+    entry.visual_description,
+    // [4] Outfit before style (identity beats generic archetype)
+    entry.outfit ? `wearing ${entry.outfit}` : '',
+    entry.appearance_traits?.outfit ? entry.appearance_traits.outfit : '',
+    // [5] Art style (after all identity tokens)
     entry.art_style,
+    // [6] Outfit re-anchor after style: paraphrased to survive cleanPromptForSDXL deduplication.
+    // 'dressed in' vs 'wearing' = different word tokens = both survive dedup = double outfit weight.
+    entry.outfit ? `dressed in ${entry.outfit}` : '',
+    // [7] Full character prompt (cinematic/quality tokens last)
     entry.character_prompt,
-    // Portrait constraints (conditional on style family)
+    // Portrait intent: single character, single pose, single view.
+    // Must appear explicitly to prevent SDXL from interpreting reinforced identity
+    // as a character turnaround/reference sheet request.
+    'single character portrait, one character only, one pose, one view, centered composition, upper body portrait',
+    // Style-family constraints
     ...(styleFamily === 'cartoon'
       ? [
           'Pixar-style 3D animated character, Disney-inspired expressive face, 3D stylized render, volumetric lighting, soft cinematic lighting, subsurface scattering, high-end animated film',
           'cute proportions, slightly larger head, big expressive eyes, smooth plastic-like 3D shading',
           'colorful family animation movie style, rounded features, stylized anatomy, toy-like materials',
-          'animated movie character proportions, clean simple background, solid color or gradient background',
+          'clean simple background, solid color or gradient background',
         ]
       : [
-          'full body character portrait, standing, neutral pose, looking at camera',
           'clean simple background, solid color or gradient background',
-          'professional character sheet style, consistent lighting, centered composition',
-          'high quality, detailed character design, sharp focus',
+          'consistent lighting, high quality, detailed, sharp focus',
         ]
     ),
   ].filter(Boolean);
@@ -457,13 +510,39 @@ export function buildCharacterPortraitPrompt(entry: CharacterBibleEntry, styleFa
  * Build a negative prompt for a character portrait generation.
  */
 export function buildCharacterPortraitNegative(entry: CharacterBibleEntry, styleFamily?: string): string {
+  // Patch A-2: opposite-gender blocking added. Previously absent.
+  // Without this the model had no instruction to avoid opposite-gender features.
+  const rawGender = (entry.gender || '').toLowerCase();
+  const resolvedGender =
+    ['male', 'man', 'boy', 'masculine'].includes(rawGender) ? 'male' :
+    ['female', 'woman', 'girl', 'feminine'].includes(rawGender) ? 'female' : 'person';
+
+  const genderNegative =
+    resolvedGender === 'male'
+      ? 'female, woman, girl, feminine face, feminine features, long feminine hair, makeup, lipstick, mascara, breasts, feminine curves, dress, skirt, cleavage'
+      : resolvedGender === 'female'
+      ? 'male, man, boy, masculine face, beard, mustache, masculine features, broad shoulders, stubble'
+      : '';
+
+  // Patch 3: anti-beautification negatives.
+  // Prevents SDXL+LoRA+style from drifting toward generic cinematic perfection.
+  const antiBeautification = 'perfect face, flawless skin, beauty makeup, hyper attractive, glamour portrait, airbrushed, perfect symmetry, idealized features, disney princess face';
+
   const negs = [
+    genderNegative,
+    antiBeautification,
     entry.negative_prompt,
     'complex background, messy background, multiple characters',
     'action pose, running, jumping, fighting',
+    // Patch 3: outfit-collapse negatives. Prevents SDXL from defaulting to generic clothing.
+    // 'generic hoodie' instead of 'hoodie' to avoid blocking legitimate hoodie outfits.
+    'generic hoodie, plain jacket, simple outfit, plain clothing, generic clothes, no accessories, bare neck',
     'blurry, low quality, deformed, bad anatomy',
     'extra limbs, missing limbs, distorted face',
     'nsfw, nude, explicit',
+    // Portrait intent negatives: prevent turnaround/reference sheet interpretation.
+    // Added after reinforced identity traits caused SDXL to interpret prompt as ref sheet.
+    'character sheet, turnaround sheet, reference sheet, multiple poses, multiple angles, front side back views, model sheet, lineup sheet, concept board, pose sheet, expression sheet, multiple views, orthographic views, rotation sheet, character rotation',
     ...(styleFamily === 'cartoon'
       ? [
           'anime, manga, 2D, illustration, comic, sketch, line art, flat shading, cel shading, black outline, monochrome, drawing, ink, panel, comic page, photorealistic, real human, realistic skin, skin pores',
@@ -566,15 +645,20 @@ export function injectBibleCharactersIntoScene(
   }>;
 } {
   if (bibleEntries.length === 0) {
-    return { prompt: cleanPromptForSDXL(scenePrompt), negative: '', referenceImages: [] };
+    return { prompt: cleanPromptForSDXL(scenePrompt), negative: '', referenceImages: [], characters: [] };
   }
+  // Patch 3: hard cap at 2 characters. Callers should pre-filter by scene.characters IDs.
+  if (bibleEntries.length > 2) {
+    console.warn('[INJECT BIBLE] Capping ' + bibleEntries.length + ' characters at 2 to prevent prompt overflow.');
+  }
+  const entries = bibleEntries.slice(0, 2);
 
-  const referenceImages: string[] = bibleEntries
+  const referenceImages: string[] = entries
     .map((e) => e.reference_image_path)
     .filter((p): p is string => p !== null);
 
     // Build character identity payload for scene generation
-  const characterIdentityPayload = bibleEntries.map((entry) => ({
+  const characterIdentityPayload = entries.map((entry) => ({
     id: entry.id,
     reference_image_path: entry.reference_image_path,
     reference_image_for_ipadapter: entry.reference_image_for_ipadapter,
@@ -583,11 +667,11 @@ export function injectBibleCharactersIntoScene(
   }));
 
   // Build character descriptors for scene
-  const charParts = bibleEntries.map((entry) => buildSceneInjectionPrompt(entry));
+  const charParts = entries.map((entry) => buildSceneInjectionPrompt(entry));
   const sceneAugment = charParts.join('; ');
 
   // Combine negatives
-  const allNegatives = bibleEntries.map((entry) => buildSceneInjectionNegative(entry));
+  const allNegatives = entries.map((entry) => buildSceneInjectionNegative(entry));
   const combinedNegative = [...new Set(allNegatives.flatMap((n) => n.split(', ').map((s) => s.trim())))].join(', ');
 
   const cleanScene = cleanPromptForSDXL(scenePrompt);
